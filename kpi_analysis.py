@@ -65,7 +65,7 @@ def generate_kpi_summary(balance_df: pd.DataFrame) -> dict[str, Any]:
             "conditionally_accepted": 0,
             "rejected": 0,
             "overall": "rejected",
-            "explanation": "No KPI data available.",
+            "explanation": "Данных по KPI пока нет.",
         }
 
     counts = balance_df["status"].value_counts().to_dict()
@@ -75,13 +75,13 @@ def generate_kpi_summary(balance_df: pd.DataFrame) -> dict[str, Any]:
 
     if rejected > 0:
         overall: Status = "rejected"
-        explanation = "One or more KPIs exceed 25% deviation from optimal."
+        explanation = "Кое-что вылезло за 25% от оптимума — так не пойдёт."
     elif conditional > 0:
         overall = "conditionally_accepted"
-        explanation = "All KPIs within 25%, but some between 20% and 25%."
+        explanation = "В целом терпимо: всё до 25%, но есть KPI в зоне 20–25%."
     else:
         overall = "accepted"
-        explanation = "All KPI deviations are within 20% of optimal."
+        explanation = "Красота: все KPI в пределах 20% от оптимума."
 
     return {
         "accepted": accepted,
@@ -106,7 +106,7 @@ def recommend_anchor_kpi(
     paths_metrics: list of dicts with total_cost, total_time, total_risk.
     """
     if not paths_metrics:
-        return {"anchor_kpi": "cost", "reason": "Default: no path data.", "scores": {}}
+        return {"anchor_kpi": "cost", "reason": "Пока маршрутов нет — по умолчанию берём затраты.", "scores": {}}
 
     keys = ["total_cost", "total_time", "total_risk"]
     labels = ["cost", "time", "risk"]
@@ -119,9 +119,10 @@ def recommend_anchor_kpi(
 
     anchor = min(avg_deviations, key=avg_deviations.get)
     scores = {lbl: round(_kpi_score(avg_deviations[lbl]), 2) for lbl in labels}
+    anchor_ru = {"cost": "затраты", "time": "время", "risk": "риск"}.get(anchor, anchor)
     reason = (
-        f"Anchor '{anchor}' has the lowest average deviation ({avg_deviations[anchor]:.1f}%) "
-        f"across evaluated paths."
+        f"Я бы взял якорь «{anchor_ru}»: среднее отклонение {avg_deviations[anchor]:.1f}% — "
+        f"самое низкое среди проверенных маршрутов."
     )
     return {"anchor_kpi": anchor, "reason": reason, "scores": scores, "avg_deviations": avg_deviations}
 
@@ -135,8 +136,9 @@ def build_recommendations(
     recs = [summary.get("explanation", "")]
     recs.append(anchor_info.get("reason", ""))
     for _, row in balance_df.iterrows():
+        kpi_ru = {"cost": "затраты", "time": "время", "risk": "риск"}.get(row["kpi"], row["kpi"])
         if row["status"] == "rejected":
-            recs.append(f"Reduce {row['kpi']}: deviation {row['deviation_pct']}% exceeds 25%.")
+            recs.append(f"Подтяни {kpi_ru}: отклонение {row['deviation_pct']}% — больше 25%.")
         elif row["status"] == "conditionally_accepted":
-            recs.append(f"Monitor {row['kpi']}: deviation {row['deviation_pct']}% is in warning zone.")
+            recs.append(f"Держи глаз на {kpi_ru}: {row['deviation_pct']}% — жёлтая зона (20–25%).")
     return [r for r in recs if r]

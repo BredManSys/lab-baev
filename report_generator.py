@@ -16,7 +16,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from graph_visualizer import export_graph_png, figure_to_bytes, visualize_graph_matplotlib
+from graph_visualizer import figure_to_bytes, visualize_graph_matplotlib
+from utils import KPI_RU, OVERALL_RU, graph_summary_ru
 
 
 def _styles():
@@ -42,7 +43,7 @@ def _styles():
 
 def _df_table(df: pd.DataFrame, col_widths: list[float] | None = None) -> Table:
     if df.empty:
-        data = [["No data"]]
+        data = [["Нет данных"]]
         t = Table(data)
     else:
         data = [df.columns.tolist()] + df.astype(str).values.tolist()
@@ -86,21 +87,23 @@ def generate_pdf_report(
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Title page
+    anchor_ru = KPI_RU.get(anchor_kpi, anchor_kpi)
     story.append(Paragraph("SCM KPI Optimizer", title_style))
-    story.append(Paragraph("Transport SCM Network Analysis Report", body_style))
+    story.append(Paragraph("Отчёт по транспортной SCM-сети", body_style))
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"Generated: {now}", body_style))
-    story.append(Paragraph(f"Anchor KPI: {anchor_kpi} | Relaxation: {relaxation_percent}%", body_style))
+    story.append(Paragraph(f"Собран: {now}", body_style))
+    story.append(Paragraph(f"Якорный KPI: {anchor_ru} | Допуск: {relaxation_percent}%", body_style))
     story.append(Spacer(1, 24))
 
     # Graph summary
-    story.append(Paragraph("1. Graph Summary", heading_style))
-    summary_lines = [f"<b>{k}:</b> {v}" for k, v in graph_summary.items()]
+    story.append(Paragraph("1. Сводка по графу", heading_style))
+    ru_summary = graph_summary_ru(graph_summary)
+    summary_lines = [f"<b>{k}:</b> {v}" for k, v in ru_summary.items()]
     story.append(Paragraph("<br/>".join(summary_lines), body_style))
     story.append(Spacer(1, 12))
 
     # Visualization
-    story.append(Paragraph("2. Network Visualization", heading_style))
+    story.append(Paragraph("2. Визуализация сети", heading_style))
     if graph is not None:
         fig = visualize_graph_matplotlib(graph, highlight_path=highlight_path)
         img_bytes = figure_to_bytes(fig)
@@ -109,43 +112,45 @@ def generate_pdf_report(
     story.append(Spacer(1, 12))
 
     # Edge table
-    story.append(Paragraph("3. Edge Table", heading_style))
+    story.append(Paragraph("3. Таблица рёбер", heading_style))
     story.append(_df_table(edge_df))
     story.append(Spacer(1, 12))
 
     # Optimal paths
-    story.append(Paragraph("4. Optimal Paths by KPI", heading_style))
+    story.append(Paragraph("4. Оптимальные маршруты по KPI", heading_style))
     story.append(_df_table(optimal_paths_df))
     story.append(Spacer(1, 12))
 
     # KPI analysis
-    story.append(Paragraph("5. KPI Analysis", heading_style))
+    story.append(Paragraph("5. Анализ KPI", heading_style))
     story.append(_df_table(kpi_balance_df))
     story.append(Spacer(1, 8))
+    overall = kpi_summary.get("overall", "N/A")
+    overall_ru = OVERALL_RU.get(str(overall), str(overall))
     story.append(
         Paragraph(
-            f"Verdict: <b>{kpi_summary.get('overall', 'N/A')}</b> — {kpi_summary.get('explanation', '')}",
+            f"Итог: <b>{overall_ru}</b> — {kpi_summary.get('explanation', '')}",
             body_style,
         )
     )
     story.append(Spacer(1, 12))
 
     # Deviations & balanced path
-    story.append(Paragraph("6. Deviations & Balanced Path", heading_style))
+    story.append(Paragraph("6. Отклонения и сбалансированный путь", heading_style))
     if balanced_result:
         bm = balanced_result.get("balanced_metrics", {})
         story.append(
             Paragraph(
-                f"Balanced path: {' → '.join(map(str, balanced_result.get('balanced_path', [])))}<br/>"
-                f"Cost: {bm.get('total_cost', '—')} | Time: {bm.get('total_time', '—')} | "
-                f"Risk: {bm.get('total_risk', '—')} | Score: {bm.get('balance_score', '—')}",
+                f"Маршрут: {' → '.join(map(str, balanced_result.get('balanced_path', [])))}<br/>"
+                f"Затраты: {bm.get('total_cost', '—')} | Время: {bm.get('total_time', '—')} | "
+                f"Риск: {bm.get('total_risk', '—')} | Баланс: {bm.get('balance_score', '—')}",
                 body_style,
             )
         )
     story.append(Spacer(1, 12))
 
     # Recommendations
-    story.append(Paragraph("7. Recommendations", heading_style))
+    story.append(Paragraph("7. Рекомендации", heading_style))
     for rec in recommendations:
         story.append(Paragraph(f"• {rec}", body_style))
         story.append(Spacer(1, 4))

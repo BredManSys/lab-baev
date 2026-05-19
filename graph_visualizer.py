@@ -78,7 +78,7 @@ def visualize_graph_matplotlib(
     nx.draw_networkx_edge_labels(
         graph, pos, edge_labels=labels, font_color="#ecf0f1", font_size=7, ax=ax,
     )
-    ax.set_title("SCM Network (Matplotlib)", color="white", fontsize=14)
+    ax.set_title("SCM-сеть (Matplotlib)", color="white", fontsize=14)
     ax.axis("off")
     fig.tight_layout()
     return fig
@@ -126,7 +126,7 @@ def visualize_graph_plotly(
 
     fig = go.Figure(data=edge_traces + [node_trace])
     fig.update_layout(
-        title="SCM Network (Plotly)",
+        title="SCM-сеть (Plotly)",
         showlegend=False,
         paper_bgcolor="#1e1e1e",
         plot_bgcolor="#2d2d2d",

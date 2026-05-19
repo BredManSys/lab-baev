@@ -81,10 +81,10 @@ def _sync_graph_derived(graph: nx.DiGraph | None) -> None:
     st.session_state["nodes"] = list(graph.nodes())
     st.session_state["edges"] = graph_to_edge_records(graph)
     st.session_state["weights"] = {
-        f"{e['source']}-{e['target']}": {
-            "cost": e["cost"],
-            "time": e["time"],
-            "risk": e["risk"],
+        f"{e.get('от', e.get('source'))}-{e.get('до', e.get('target'))}": {
+            "cost": e.get("затраты", e.get("cost")),
+            "time": e.get("время", e.get("time")),
+            "risk": e.get("риск", e.get("risk")),
         }
         for e in st.session_state["edges"]
     }
@@ -120,14 +120,14 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
-        return False, f"Invalid JSON: {e}"
+        return False, f"Кривой JSON: {e}"
 
     if data.get("version") != SESSION_VERSION:
-        return False, f"Unsupported session version (expected {SESSION_VERSION})."
+        return False, f"Версия сессии не подходит (нужна {SESSION_VERSION})."
 
     graph = _graph_from_serializable(data.get("graph"))
     if graph is not None and not nx.is_directed_acyclic_graph(graph):
-        return False, "Loaded graph contains cycles (not a DAG)."
+        return False, "В графе есть циклы — это уже не DAG."
 
     set_graph(graph)
     st.session_state["optimization_results"] = data.get("optimization_results", {})
@@ -137,7 +137,7 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
     st.session_state["highlight_path"] = data.get("highlight_path", [])
     st.session_state["source"] = int(data.get("source", 1))
     st.session_state["target"] = int(data.get("target", 9))
-    return True, "Session loaded successfully."
+    return True, "Сессия загружена, всё ок."
 
 
 def reset_session() -> None:
@@ -149,14 +149,14 @@ def reset_session() -> None:
 
 def render_session_io() -> None:
     """Sidebar widgets: download / upload session JSON."""
-    st.sidebar.subheader("Session")
+    st.sidebar.subheader("Сессия")
     st.sidebar.download_button(
-        "Download session (.json)",
+        "Скачать сессию (.json)",
         data=save_session_to_json(),
         file_name="scm_kpi_session.json",
         mime="application/json",
     )
-    uploaded = st.sidebar.file_uploader("Upload session JSON", type=["json"])
+    uploaded = st.sidebar.file_uploader("Загрузить сессию (.json)", type=["json"])
     if uploaded is not None:
         ok, msg = load_session_from_json(uploaded.getvalue().decode("utf-8"))
         if ok:

@@ -1,5 +1,5 @@
 """
-SCM KPI Optimizer — Streamlit web application for transport SCM network analysis.
+SCM KPI Optimizer — веб-приложение Streamlit для анализа транспортной SCM-сети.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import streamlit as st
 from graph_generator import generate_random_dag, graph_summary
 from graph_visualizer import (
     export_graph_png,
-    figure_to_bytes,
     visualize_graph_matplotlib,
     visualize_graph_plotly,
     visualize_graph_pyvis,
@@ -34,9 +33,17 @@ from path_optimizer import (
 )
 from report_generator import build_results_payload, export_csv, export_json_results, generate_pdf_report
 from session_manager import initialize_session, render_session_io, reset_session, set_graph
-from utils import graph_to_edge_records
+from utils import (
+    KPI_RU,
+    graph_to_edge_records,
+    localize_balance_df,
+    localize_optimal_df,
+    localize_paths_df,
+)
 
-# ——— Page config & styling ———
+KPI_OPTIONS = ["cost", "time", "risk"]
+KPI_LABELS = {"cost": "затраты", "time": "время", "risk": "риск"}
+
 st.set_page_config(
     page_title="SCM KPI Optimizer",
     page_icon="📊",
@@ -62,25 +69,30 @@ st.markdown(
 
 initialize_session()
 
-# ——— Sidebar ———
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/supply-chain.png", width=72)
-    st.title("Settings")
-    st.markdown("**SCM KPI Optimizer** — курсовой проект по анализу транспортной SCM-сети (DAG) с KPI: cost, time, risk.")
+    st.title("Настройки")
+    st.markdown(
+        "**SCM KPI Optimizer** — курсовая: копаем транспортную SCM-сеть (DAG) "
+        "и смотрим KPI: **затраты**, **время**, **риск**."
+    )
     render_session_io()
-    if st.button("Reset session", use_container_width=True):
+    if st.button("Сбросить всё", use_container_width=True):
         reset_session()
         st.rerun()
     st.divider()
-    st.session_state["source"] = st.number_input("Source node", min_value=1, value=int(st.session_state["source"]))
-    st.session_state["target"] = st.number_input("Target node", min_value=1, value=int(st.session_state["target"]))
-    viz_backend = st.selectbox("Visualization backend", ["Plotly", "Matplotlib", "Pyvis"])
+    st.session_state["source"] = st.number_input(
+        "Откуда (узел)", min_value=1, value=int(st.session_state["source"])
+    )
+    st.session_state["target"] = st.number_input(
+        "Куда (узел)", min_value=1, value=int(st.session_state["target"])
+    )
+    viz_backend = st.selectbox("Как рисовать граф", ["Plotly", "Matplotlib", "Pyvis"])
 
-# ——— Header ———
 st.title("📊 SCM KPI Optimizer")
 st.caption(
-    "Анализ ориентированной ациклической транспортной сети: оптимизация маршрутов по cost / time / risk "
-    "и сбалансированный выбор пути с учётом anchor KPI."
+    "Крутим ориентированный DAG, ищем маршруты по затратам / времени / риску "
+    "и подбираем сбалансированный путь с якорным KPI и допуском."
 )
 
 graph = st.session_state.get("graph")
@@ -88,34 +100,32 @@ source = int(st.session_state["source"])
 target = int(st.session_state["target"])
 highlight = st.session_state.get("highlight_path") or []
 
-# ——— Metrics row ———
 m1, m2, m3, m4 = st.columns(4)
 summary = (
     graph_summary(graph, source, target)
     if graph is not None
     else {"nodes": 0, "edges": 0, "is_dag": False, "has_path": False}
 )
-m1.metric("Nodes", summary.get("nodes", 0))
-m2.metric("Edges", summary.get("edges", 0))
-m3.metric("Is DAG", "Yes" if summary.get("is_dag") else "No")
-m4.metric(f"Path {source}→{target}", "Yes" if summary.get("has_path") else "No")
+m1.metric("Узлов", summary.get("nodes", 0))
+m2.metric("Рёбер", summary.get("edges", 0))
+m3.metric("Это DAG?", "Да" if summary.get("is_dag") else "Нет")
+m4.metric(f"Путь {source}→{target}", "Есть" if summary.get("has_path") else "Нет")
 
 tab_setup, tab_viz, tab_opt, tab_kpi, tab_export = st.tabs(
-    ["Graph Setup", "Visualization", "Optimization", "KPI Analysis", "Reports & Export"]
+    ["Граф", "Картинка", "Маршруты", "KPI", "Выгрузка"]
 )
 
-# ——— TAB 1: Graph Setup ———
 with tab_setup:
-    st.subheader("Graph Setup")
+    st.subheader("Настройка графа")
     c1, c2 = st.columns([2, 1])
     with c1:
-        st.markdown("Сгенерируйте случайный DAG или загрузите сессию из sidebar.")
+        st.markdown("Нажми кнопку — соберём случайный DAG. Или подгрузи сессию слева.")
     with c2:
-        num_nodes = st.slider("Number of nodes", 9, 24, 12)
-        edge_prob = st.slider("Edge probability", 0.1, 0.8, 0.35, 0.05)
-        seed = st.number_input("Random seed", value=42, step=1)
+        num_nodes = st.slider("Сколько узлов", 9, 24, 12)
+        edge_prob = st.slider("Вероятность ребра", 0.1, 0.8, 0.35, 0.05)
+        seed = st.number_input("Сид рандома", value=42, step=1)
 
-    if st.button("Generate random DAG", type="primary", use_container_width=True):
+    if st.button("Сгенерить DAG", type="primary", use_container_width=True):
         g = generate_random_dag(
             num_nodes=num_nodes,
             edge_probability=edge_prob,
@@ -124,24 +134,23 @@ with tab_setup:
         set_graph(g)
         st.session_state["optimization_results"] = {}
         st.session_state["highlight_path"] = []
-        st.success(f"Graph created: {g.number_of_nodes()} nodes, {g.number_of_edges()} edges.")
+        st.success(f"Готово: {g.number_of_nodes()} узлов, {g.number_of_edges()} рёбер.")
         st.rerun()
 
     if graph is not None:
         st.dataframe(pd.DataFrame(graph_to_edge_records(graph)), use_container_width=True, hide_index=True)
 
-# ——— TAB 2: Visualization ———
 with tab_viz:
-    st.subheader("Network Visualization")
+    st.subheader("Визуализация сети")
     if graph is None:
-        st.info("Сначала сгенерируйте граф на вкладке Graph Setup.")
+        st.info("Сначала сгенери граф на вкладке «Граф».")
     else:
-        path_options = ["None"] + [
+        path_options = ["— не подсвечивать —"] + [
             " → ".join(map(str, p))
             for p in enumerate_all_paths(graph, source, target)[:20]
         ]
-        selected = st.selectbox("Highlight path", path_options)
-        if selected != "None":
+        selected = st.selectbox("Подсветить маршрут", path_options)
+        if selected != "— не подсвечивать —":
             highlight = [int(x) for x in selected.split(" → ")]
             st.session_state["highlight_path"] = highlight
         else:
@@ -149,7 +158,10 @@ with tab_viz:
             st.session_state["highlight_path"] = []
 
         if viz_backend == "Plotly":
-            st.plotly_chart(visualize_graph_plotly(graph, highlight_path=highlight or None), use_container_width=True)
+            st.plotly_chart(
+                visualize_graph_plotly(graph, highlight_path=highlight or None),
+                use_container_width=True,
+            )
         elif viz_backend == "Matplotlib":
             fig = visualize_graph_matplotlib(graph, highlight_path=highlight or None)
             st.pyplot(fig)
@@ -157,22 +169,28 @@ with tab_viz:
             html = visualize_graph_pyvis(graph, highlight_path=highlight or None)
             st.components.v1.html(html, height=520, scrolling=True)
 
-# ——— TAB 3: Optimization ———
 with tab_opt:
-    st.subheader("Path Optimization")
+    st.subheader("Оптимизация маршрутов")
     if graph is None:
-        st.info("Сначала сгенерируйте граф.")
+        st.info("Сначала сгенери граф.")
     else:
+        anchor_ix = KPI_OPTIONS.index(st.session_state.get("selected_anchor_kpi", "cost"))
         st.session_state["selected_anchor_kpi"] = st.selectbox(
-            "Anchor KPI",
-            ["cost", "time", "risk"],
-            index=["cost", "time", "risk"].index(st.session_state.get("selected_anchor_kpi", "cost")),
+            "Якорный KPI (главный критерий)",
+            KPI_OPTIONS,
+            index=anchor_ix,
+            format_func=lambda k: KPI_LABELS[k],
         )
         st.session_state["relaxation_percent"] = st.slider(
-            "Relaxation %", 10.0, 15.0, float(st.session_state.get("relaxation_percent", 12.0)), 0.5,
+            "Допуск по якорю, %",
+            10.0,
+            15.0,
+            float(st.session_state.get("relaxation_percent", 12.0)),
+            0.5,
+            help="На сколько % можно просесть по якорю, пока ищем баланс по остальным KPI.",
         )
 
-        if st.button("Run optimization", type="primary"):
+        if st.button("Погнали оптимизацию", type="primary"):
             anchor = st.session_state["selected_anchor_kpi"]
             relax = st.session_state["relaxation_percent"]
             try:
@@ -186,32 +204,39 @@ with tab_opt:
                     "optimal_paths": optimal_df,
                 }
                 st.session_state["highlight_path"] = balanced.get("balanced_path", [])
-                st.success("Optimization complete.")
+                st.success("Готово, маршруты посчитаны.")
             except Exception as e:
-                st.error(f"Optimization failed: {e}")
+                st.error(f"Не вышло: {e}")
 
         res = st.session_state.get("optimization_results", {})
         if res:
             balanced = res.get("balanced", {})
-            st.markdown("**Balanced path**")
+            st.markdown("**Сбалансированный маршрут**")
             st.code(" → ".join(map(str, balanced.get("balanced_path", []))))
             bm = balanced.get("balanced_metrics", {})
             o1, o2, o3, o4 = st.columns(4)
-            o1.metric("Total cost", f"{bm.get('total_cost', 0):.2f}")
-            o2.metric("Total time", f"{bm.get('total_time', 0):.2f}")
-            o3.metric("Total risk", f"{bm.get('total_risk', 0):.2f}")
-            o4.metric("Balance score", f"{bm.get('balance_score', 0):.4f}")
+            o1.metric("Затраты", f"{bm.get('total_cost', 0):.2f}")
+            o2.metric("Время", f"{bm.get('total_time', 0):.2f}")
+            o3.metric("Риск", f"{bm.get('total_risk', 0):.2f}")
+            o4.metric("Баланс", f"{bm.get('balance_score', 0):.4f}")
 
-            st.markdown("**Optimal paths by single KPI**")
-            st.dataframe(res.get("optimal_paths"), use_container_width=True, hide_index=True)
-            st.markdown("**Ranked paths**")
-            st.dataframe(res.get("ranked_paths"), use_container_width=True, hide_index=True)
+            st.markdown("**Лучшие маршруты по одному KPI**")
+            st.dataframe(
+                localize_optimal_df(res.get("optimal_paths")),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.markdown("**Все маршруты (рейтинг)**")
+            st.dataframe(
+                localize_paths_df(res.get("ranked_paths")),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-# ——— TAB 4: KPI Analysis ———
 with tab_kpi:
-    st.subheader("KPI Analysis")
+    st.subheader("Разбор KPI")
     if graph is None or not st.session_state.get("optimization_results"):
-        st.info("Сначала выполните оптимизацию на вкладке Optimization.")
+        st.info("Сначала жми «Погнали оптимизацию» на вкладке «Маршруты».")
     else:
         balanced = st.session_state["optimization_results"]["balanced"]
         current_path = balanced.get("balanced_path", [])
@@ -233,34 +258,40 @@ with tab_kpi:
         recommendations = build_recommendations(kpi_summary, anchor_info, balance_df)
 
         v1, v2, v3 = st.columns(3)
-        v1.metric("Accepted KPIs", kpi_summary["accepted"])
-        v2.metric("Conditional", kpi_summary["conditionally_accepted"])
-        v3.metric("Rejected", kpi_summary["rejected"])
-        st.warning(kpi_summary["explanation"]) if kpi_summary["overall"] != "accepted" else st.success(kpi_summary["explanation"])
+        v1.metric("Норм", kpi_summary["accepted"])
+        v2.metric("Терпимо", kpi_summary["conditionally_accepted"])
+        v3.metric("Плохо", kpi_summary["rejected"])
 
-        st.dataframe(balance_df, use_container_width=True, hide_index=True)
-        st.markdown(f"**Recommended anchor:** {anchor_info['anchor_kpi']} — {anchor_info['reason']}")
+        if kpi_summary["overall"] != "accepted":
+            st.warning(kpi_summary["explanation"])
+        else:
+            st.success(kpi_summary["explanation"])
+
+        st.dataframe(localize_balance_df(balance_df), use_container_width=True, hide_index=True)
+        anchor_ru = KPI_RU.get(anchor_info["anchor_kpi"], anchor_info["anchor_kpi"])
+        st.markdown(f"**Совет по якорю:** {anchor_ru} — {anchor_info['reason']}")
         for rec in recommendations:
             st.markdown(f"- {rec}")
 
         st.session_state["reports"] = {
-            "kpi_balance_df": balance_df,
+            "kpi_balance_df": localize_balance_df(balance_df),
             "kpi_summary": kpi_summary,
             "recommendations": recommendations,
             "anchor_info": anchor_info,
         }
 
-# ——— TAB 5: Reports & Export ———
 with tab_export:
-    st.subheader("Reports & Export")
+    st.subheader("Отчёты и выгрузка")
     if graph is None:
-        st.info("Нет данных для экспорта.")
+        st.info("Пока нечего выгружать — нужен граф.")
     else:
         edge_df = pd.DataFrame(graph_to_edge_records(graph))
         res = st.session_state.get("optimization_results", {})
         reports = st.session_state.get("reports", {})
-        optimal_df = res.get("optimal_paths", optimal_paths_summary(graph, source, target))
-        ranked_df = res.get("ranked_paths", pd.DataFrame())
+        optimal_df = localize_optimal_df(
+            res.get("optimal_paths", optimal_paths_summary(graph, source, target))
+        )
+        ranked_df = localize_paths_df(res.get("ranked_paths", pd.DataFrame()))
         balance_df = reports.get("kpi_balance_df", pd.DataFrame())
         kpi_summary = reports.get("kpi_summary", {})
         recommendations = reports.get("recommendations", [])
@@ -273,7 +304,7 @@ with tab_export:
 
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            if st.button("Generate PDF report"):
+            if st.button("Собрать PDF"):
                 pdf_path = export_dir / f"scm_report_{ts}.pdf"
                 generate_pdf_report(
                     pdf_path,
@@ -290,16 +321,16 @@ with tab_export:
                     balanced_result=balanced,
                 )
                 st.session_state["last_pdf"] = str(pdf_path)
-                st.success(f"PDF saved: {pdf_path}")
+                st.success(f"PDF лёг сюда: {pdf_path}")
 
         with col_b:
             csv_path = export_dir / f"edges_{ts}.csv"
-            if st.button("Export edges CSV"):
+            if st.button("Выгрузить рёбра в CSV"):
                 export_csv(edge_df, csv_path)
-                st.success(f"CSV saved: {csv_path}")
+                st.success(f"CSV: {csv_path}")
 
         with col_c:
-            if st.button("Export results JSON"):
+            if st.button("Выгрузить JSON с результатами"):
                 payload = build_results_payload(
                     graph_summary=summary,
                     optimal_paths_df=optimal_df,
@@ -312,14 +343,14 @@ with tab_export:
                 )
                 json_path = export_dir / f"results_{ts}.json"
                 export_json_results(payload, json_path)
-                st.success(f"JSON saved: {json_path}")
+                st.success(f"JSON: {json_path}")
 
         if "last_pdf" in st.session_state and Path(st.session_state["last_pdf"]).exists():
             with open(st.session_state["last_pdf"], "rb") as f:
-                st.download_button("Download PDF", f, file_name=Path(st.session_state["last_pdf"]).name)
+                st.download_button("Скачать PDF", f, file_name=Path(st.session_state["last_pdf"]).name)
 
         png_path = Path("temp") / f"graph_{ts}.png"
-        if st.button("Export graph PNG"):
+        if st.button("Сохранить картинку графа (PNG)"):
             export_graph_png(graph, png_path, highlight_path=st.session_state.get("highlight_path"))
             with open(png_path, "rb") as f:
-                st.download_button("Download PNG", f, file_name=png_path.name)
+                st.download_button("Скачать PNG", f, file_name=png_path.name)
