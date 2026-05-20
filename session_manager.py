@@ -26,6 +26,8 @@ DEFAULT_STATE: dict[str, Any] = {
     "highlight_path": [],
     "source": 1,
     "target": 9,
+    "graph_density": 1.2,
+    "edge_font_size": 11,
 }
 
 
@@ -88,6 +90,9 @@ def _sync_graph_derived(graph: nx.DiGraph | None) -> None:
         }
         for e in st.session_state["edges"]
     }
+    # Default routing bounds: always from first to last node.
+    st.session_state["source"] = 1
+    st.session_state["target"] = max(graph.nodes()) if graph.number_of_nodes() else 1
 
 
 def set_graph(graph: nx.DiGraph | None) -> None:
@@ -110,6 +115,8 @@ def save_session_to_json() -> str:
         "highlight_path": st.session_state.get("highlight_path", []),
         "source": st.session_state.get("source", 1),
         "target": st.session_state.get("target", 9),
+        "graph_density": st.session_state.get("graph_density", 1.2),
+        "edge_font_size": st.session_state.get("edge_font_size", 11),
         "summary": graph_summary(graph) if graph is not None else {},
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
@@ -120,14 +127,14 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
-        return False, f"Кривой JSON: {e}"
+        return False, f"Некорректный JSON: {e}"
 
     if data.get("version") != SESSION_VERSION:
-        return False, f"Версия сессии не подходит (нужна {SESSION_VERSION})."
+        return False, f"Несовместимая версия сессии (требуется {SESSION_VERSION})."
 
     graph = _graph_from_serializable(data.get("graph"))
     if graph is not None and not nx.is_directed_acyclic_graph(graph):
-        return False, "В графе есть циклы — это уже не DAG."
+        return False, "Граф содержит циклы и не является DAG."
 
     set_graph(graph)
     st.session_state["optimization_results"] = data.get("optimization_results", {})
@@ -136,8 +143,14 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
     st.session_state["reports"] = data.get("reports", {})
     st.session_state["highlight_path"] = data.get("highlight_path", [])
     st.session_state["source"] = int(data.get("source", 1))
-    st.session_state["target"] = int(data.get("target", 9))
-    return True, "Сессия загружена, всё ок."
+    loaded_target = int(data.get("target", 9))
+    if graph is not None and graph.number_of_nodes() > 0:
+        st.session_state["target"] = max(graph.nodes())
+    else:
+        st.session_state["target"] = loaded_target
+    st.session_state["graph_density"] = float(data.get("graph_density", 1.2))
+    st.session_state["edge_font_size"] = int(data.get("edge_font_size", 11))
+    return True, "Сессия успешно загружена."
 
 
 def reset_session() -> None:

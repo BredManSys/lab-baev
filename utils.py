@@ -12,14 +12,14 @@ KPI_KEYS = ("cost", "time", "risk")
 KPI_RU = {"cost": "затраты", "time": "время", "risk": "риск"}
 
 STATUS_RU = {
-    "accepted": "норм",
-    "conditionally_accepted": "терпимо",
-    "rejected": "плохо",
+    "accepted": "принято",
+    "conditionally_accepted": "условно принято",
+    "rejected": "отклонено",
 }
 
 OVERALL_RU = {
     "accepted": "принято",
-    "conditionally_accepted": "условно ок",
+    "conditionally_accepted": "условно принято",
     "rejected": "отклонено",
 }
 

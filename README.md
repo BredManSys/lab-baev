@@ -2,7 +2,7 @@
 
 Streamlit-приложение для анализа транспортной SCM-сети на основе **ориентированного DAG** с KPI на рёбрах: **cost**, **time**, **risk**.
 
-Курсовой проект: генерация сети, визуализация, оптимизация маршрутов (Dijkstra), сбалансированный путь с anchor KPI, KPI-аналитика и экспорт отчётов (PDF / CSV / JSON).
+Учебный проект: генерация сети, визуализация, оптимизация маршрутов (Dijkstra), подбор сбалансированного маршрута с якорным KPI и анализ KPI.
 
 ---
 
@@ -15,14 +15,14 @@ lab-baev/
 ├── graph_visualizer.py    # Matplotlib / Plotly / Pyvis
 ├── path_optimizer.py      # Dijkstra, ranking, balanced path
 ├── kpi_analysis.py        # Отклонения KPI, рекомендации
-├── report_generator.py    # PDF, CSV, JSON export
-├── session_manager.py     # session_state + JSON save/load
-├── utils.py               # Общие хелперы
+├── report_generator.py    # Экспорт отчётов (PDF, CSV, JSON)
+├── session_manager.py     # Управление session_state и JSON save/load
+├── utils.py               # Общие вспомогательные функции
 ├── requirements.txt
 ├── runtime.txt            # Python version (Streamlit Cloud)
 ├── packages.txt           # OS packages (Streamlit Cloud)
 ├── assets/
-├── exports/               # Сгенерированные отчёты
+├── exports/               # Экспортированные отчёты
 ├── temp/                  # Временные файлы (PNG и т.д.)
 └── README.md
 ```
@@ -67,22 +67,21 @@ streamlit run app.py
 
 Приложение откроется в браузере (обычно `http://localhost:8501`).
 
-### Workflow в приложении
+### Порядок работы в приложении
 
-1. **Graph Setup** — сгенерировать DAG  
-2. **Visualization** — выбрать backend и подсветить путь  
-3. **Optimization** — anchor KPI + relaxation → balanced path  
-4. **KPI Analysis** — отклонения и рекомендации  
-5. **Reports & Export** — PDF / CSV / JSON / PNG  
+1. **Граф** — сформировать DAG  
+2. **Визуализация** — выбрать тип рендера, настроить параметры отображения и подсветить маршрут  
+3. **Маршруты** — выполнить оптимизацию по якорному KPI и допуску  
+4. **KPI** — проанализировать отклонения и рекомендации  
 
-Сессию можно сохранить и загрузить через sidebar (**Download / Upload session JSON**).
+Сессию можно сохранить и загрузить через боковую панель (**Скачать сессию / Загрузить сессию**).
 
 ---
 
-## Деплой на GitHub
+## Публикация в GitHub
 
 ```bash
-git init   # если ещё не инициализирован
+git init   # если репозиторий еще не инициализирован
 git add .
 git commit -m "Add SCM KPI Optimizer Streamlit app"
 git branch -M main
@@ -94,13 +93,13 @@ git push -u origin main
 
 ---
 
-## Деплой на Streamlit Cloud
+## Развертывание в Streamlit Cloud
 
-1. Зайдите на [share.streamlit.io](https://share.streamlit.io) и войдите через GitHub.  
+1. Перейдите на [share.streamlit.io](https://share.streamlit.io) и выполните вход через GitHub.  
 2. **New app** → выберите репозиторий `lab-baev`.  
 3. **Main file path:** `app.py`  
 4. **Branch:** `main`  
-5. Deploy.
+5. Нажмите **Deploy**.
 
 Streamlit Cloud автоматически читает:
 
@@ -112,24 +111,23 @@ Streamlit Cloud автоматически читает:
 
 ---
 
-## Troubleshooting
+## Устранение неполадок
 
 | Проблема | Решение |
 |----------|---------|
-| `ModuleNotFoundError` | Проверьте `requirements.txt`, пересоберите app на Streamlit Cloud |
-| Pyvis не отображается | Используйте вкладку Visualization → backend **Plotly** или **Matplotlib** |
-| Нет пути source→target | Увеличьте `edge_probability` или перегенерируйте граф; проверьте узлы в sidebar |
-| PDF пустой / ошибка | Сначала выполните **Optimization** и **KPI Analysis**, затем **Generate PDF** |
+| `ModuleNotFoundError` | Проверьте `requirements.txt` и пересоберите приложение в Streamlit Cloud |
+| Pyvis не отображается | Используйте вкладку **Визуализация** и выберите **Plotly** или **Matplotlib** |
+| Нет пути source→target | Увеличьте `edge_probability` или сформируйте граф повторно |
 | Циклы в графе | Генератор гарантирует DAG; ручные рёбра только «вперёд» по номеру узла |
-| Streamlit Cloud build fail | Убедитесь, что `runtime.txt` содержит поддерживаемую версию (`python-3.11`) |
-| `Unable to locate package #` | В `packages.txt` **нельзя** писать комментарии — только имена пакетов, по одному на строку. Если apt-пакеты не нужны — оставьте файл пустым |
-| Большой граф — долгая оптимизация | Уменьшите число узлов или `edge_probability` |
+| Ошибка сборки в Streamlit Cloud | Убедитесь, что `runtime.txt` содержит поддерживаемую версию (`python-3.11`) |
+| `Unable to locate package #` | В `packages.txt` нельзя указывать комментарии; допускаются только имена пакетов, по одному в строке |
+| Большой граф — длительная оптимизация | Уменьшите число узлов или значение `edge_probability` |
 
 ---
 
-## Итеративная разработка (vibe-coding)
+## Итеративная разработка
 
-Рекомендуемый порядок промптов:
+Рекомендуемая последовательность этапов:
 
 1. Структура проекта  
 2. `app.py` (UI skeleton)  
@@ -140,12 +138,12 @@ Streamlit Cloud автоматически читает:
 7. `session_manager.py`  
 8. `report_generator.py`  
 9. Интеграция в `app.py`  
-10. Deploy  
+10. Развертывание  
 
-При ошибках — **точечные промпты** («исправь только `generate_random_dag`»), а не «перепиши всё».
+При возникновении ошибок рекомендуется использовать точечные задачи (например, «исправить только `generate_random_dag`»), а не запрашивать полную переработку проекта.
 
 ---
 
 ## Лицензия
 
-Учебный проект. Используйте по согласованию с кафедрой / преподавателем.
+Учебный проект. Использование осуществляется по согласованию с кафедрой или преподавателем.

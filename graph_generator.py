@@ -40,7 +40,7 @@ def generate_random_dag(
 
     Guarantees:
     - At least 9 nodes (raises ValueError otherwise)
-    - Backbone path 1 -> 2 -> ... -> 9
+    - Backbone path 1 -> 2 -> ... -> num_nodes
     - Additional edges only from lower to higher node id (DAG)
     - Optional alternative routes via extra edges
     """
@@ -51,13 +51,9 @@ def generate_random_dag(
     graph = nx.DiGraph()
     graph.add_nodes_from(range(1, num_nodes + 1))
 
-    # Guaranteed path 1 -> 9
-    for u in range(1, min(9, num_nodes)):
+    # Guaranteed backbone path 1 -> ... -> num_nodes
+    for u in range(1, num_nodes):
         graph.add_edge(u, u + 1, **_random_weights(rng, min_weight, max_weight))
-
-    if num_nodes > 9:
-        for u in range(9, num_nodes):
-            graph.add_edge(u, u + 1, **_random_weights(rng, min_weight, max_weight))
 
     # Alternative routes: only forward edges (i < j) to preserve acyclicity
     for i in range(1, num_nodes + 1):
@@ -66,7 +62,7 @@ def generate_random_dag(
                 graph.add_edge(i, j, **_random_weights(rng, min_weight, max_weight))
 
     assert nx.is_directed_acyclic_graph(graph)
-    assert nx.has_path(graph, 1, min(9, num_nodes))
+    assert nx.has_path(graph, 1, num_nodes)
     return graph
 
 
@@ -121,8 +117,10 @@ def update_edge_weights(
     return graph
 
 
-def graph_summary(graph: nx.DiGraph, source: int = 1, target: int = 9) -> dict[str, Any]:
+def graph_summary(graph: nx.DiGraph, source: int = 1, target: int | None = None) -> dict[str, Any]:
     """Return basic graph statistics."""
+    if target is None and graph.number_of_nodes() > 0:
+        target = max(graph.nodes())
     has_path = False
     if graph.number_of_nodes() > 0 and source in graph and target in graph:
         try:

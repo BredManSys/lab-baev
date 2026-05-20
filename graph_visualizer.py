@@ -28,21 +28,43 @@ def _edge_labels(graph: nx.DiGraph) -> dict[tuple[int, int], str]:
 
 
 def _layout(graph: nx.DiGraph) -> dict[int, tuple[float, float]]:
+    if graph.number_of_nodes() == 0:
+        return {}
     try:
-        return nx.spring_layout(graph, seed=42, k=1.5)
+        if nx.is_directed_acyclic_graph(graph):
+            generations = list(nx.topological_generations(graph))
+            dag = graph.copy()
+            for layer, nodes in enumerate(generations):
+                for node in nodes:
+                    dag.nodes[node]["layer"] = layer
+            return nx.multipartite_layout(dag, subset_key="layer", align="horizontal", scale=3.0)
+        k = max(1.5, 3.0 / (graph.number_of_nodes() ** 0.5))
+        return nx.spring_layout(graph, seed=42, k=k, iterations=300)
     except nx.NetworkXError:
-        return nx.circular_layout(graph)
+        return nx.circular_layout(graph, scale=2.5)
+
+
+def _layout_with_density(graph: nx.DiGraph, density: float = 1.0) -> dict[int, tuple[float, float]]:
+    """Return layout scaled by density factor: higher density -> more spacing."""
+    pos = _layout(graph)
+    scale = max(0.6, min(2.2, float(density)))
+    return {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
 
 
 def visualize_graph_matplotlib(
     graph: nx.DiGraph,
     highlight_path: list[int] | None = None,
     figsize: tuple[float, float] = DEFAULT_FIGSIZE,
+    density: float = 1.0,
+    edge_font_size: int = 9,
 ) -> plt.Figure:
     """Render directed graph with matplotlib; highlight optional path."""
-    fig, ax = plt.subplots(figsize=figsize, facecolor="#1e1e1e")
+    node_count = max(1, graph.number_of_nodes())
+    fig_w = max(figsize[0], 12 + node_count * 0.4)
+    fig_h = max(figsize[1], 7 + node_count * 0.22)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="#1e1e1e")
     ax.set_facecolor("#2d2d2d")
-    pos = _layout(graph)
+    pos = _layout_with_density(graph, density=density)
 
     path_edges: set[tuple[int, int]] = set()
     path_nodes: set[int] = set()
@@ -76,7 +98,20 @@ def visualize_graph_matplotlib(
 
     labels = _edge_labels(graph)
     nx.draw_networkx_edge_labels(
-        graph, pos, edge_labels=labels, font_color="#ecf0f1", font_size=7, ax=ax,
+        graph,
+        pos,
+        edge_labels=labels,
+        font_color="#ecf0f1",
+        font_size=edge_font_size,
+        label_pos=0.52,
+        rotate=False,
+        bbox={
+            "facecolor": "#111827",
+            "edgecolor": "#d1d5db",
+            "boxstyle": "round,pad=0.25",
+            "alpha": 0.85,
+        },
+        ax=ax,
     )
     ax.set_title("SCM-сеть (Matplotlib)", color="white", fontsize=14)
     ax.axis("off")
@@ -87,14 +122,19 @@ def visualize_graph_matplotlib(
 def visualize_graph_plotly(
     graph: nx.DiGraph,
     highlight_path: list[int] | None = None,
+    density: float = 1.0,
+    edge_font_size: int = 10,
 ) -> go.Figure:
     """Interactive Plotly visualization with optional path highlight."""
-    pos = _layout(graph)
+    pos = _layout_with_density(graph, density=density)
     path_edges: set[tuple[int, int]] = set()
     if highlight_path and len(highlight_path) > 1:
         path_edges = {(highlight_path[i], highlight_path[i + 1]) for i in range(len(highlight_path) - 1)}
 
     edge_traces: list[go.Scatter] = []
+    label_x: list[float] = []
+    label_y: list[float] = []
+    label_texts: list[str] = []
     for u, v, d in graph.edges(data=True):
         x0, y0 = pos[u]
         x1, y1 = pos[v]
@@ -103,16 +143,27 @@ def visualize_graph_plotly(
         edge_traces.append(
             go.Scatter(
                 x=[x0, x1, None], y=[y0, y1, None],
-                mode="lines+text",
+                mode="lines",
                 line=dict(width=3 if (u, v) in path_edges else 1.5, color=color),
-                text=[None, lbl, None],
-                textposition="middle center",
-                textfont=dict(size=8, color="#ecf0f1"),
                 hoverinfo="text",
                 hovertext=f"{u} → {v}: {lbl}",
                 showlegend=False,
             )
         )
+        label_x.append((x0 + x1) / 2)
+        label_y.append((y0 + y1) / 2)
+        label_texts.append(lbl)
+
+    edge_label_trace = go.Scatter(
+        x=label_x,
+        y=label_y,
+        mode="text",
+        text=label_texts,
+        textposition="middle center",
+        textfont=dict(size=edge_font_size, color="#f3f4f6"),
+        hoverinfo="skip",
+        showlegend=False,
+    )
 
     node_x = [pos[n][0] for n in graph.nodes()]
     node_y = [pos[n][1] for n in graph.nodes()]
@@ -124,7 +175,7 @@ def visualize_graph_plotly(
         showlegend=False,
     )
 
-    fig = go.Figure(data=edge_traces + [node_trace])
+    fig = go.Figure(data=edge_traces + [edge_label_trace, node_trace])
     fig.update_layout(
         title="SCM-сеть (Plotly)",
         showlegend=False,
@@ -142,6 +193,8 @@ def visualize_graph_pyvis(
     graph: nx.DiGraph,
     highlight_path: list[int] | None = None,
     height: str = "500px",
+    density: float = 1.0,
+    edge_font_size: int = 15,
 ) -> str:
     """Build pyvis HTML string for embedded Streamlit display."""
     net = Network(height=height, width="100%", directed=True, bgcolor="#1e1e1e", font_color="white")
@@ -165,9 +218,13 @@ def visualize_graph_pyvis(
             width=3 if (u, v) in path_edges else 1,
         )
 
+    density = max(0.6, min(2.2, float(density)))
+    spring_len = int(140 * density)
+    gravity = int(-70 * density)
     net.set_options(
-        '{"physics": {"enabled": true, "stabilization": {"iterations": 100}}, '
-        '"edges": {"arrows": "to", "font": {"size": 10, "color": "#ecf0f1"}}}'
+        f'{{"physics": {{"enabled": true, "solver": "forceAtlas2Based", "forceAtlas2Based": {{"gravitationalConstant": {gravity}, "springLength": {spring_len}, "springConstant": 0.04}}, "stabilization": {{"iterations": 250}}}}, '
+        '"nodes": {"font": {"size": 18}}, '
+        f'"edges": {{"arrows": "to", "smooth": {{"enabled": true, "type": "dynamic"}}, "font": {{"size": {int(edge_font_size)}, "color": "#ecf0f1", "strokeWidth": 3, "strokeColor": "#111827"}}}}}}'
     )
     return net.generate_html(notebook=False)
 
@@ -176,12 +233,19 @@ def export_graph_png(
     graph: nx.DiGraph,
     filepath: str | Path,
     highlight_path: list[int] | None = None,
+    density: float = 1.0,
+    edge_font_size: int = 9,
     dpi: int = 150,
 ) -> Path:
     """Save matplotlib figure to PNG."""
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig = visualize_graph_matplotlib(graph, highlight_path=highlight_path)
+    fig = visualize_graph_matplotlib(
+        graph,
+        highlight_path=highlight_path,
+        density=density,
+        edge_font_size=edge_font_size,
+    )
     fig.savefig(path, dpi=dpi, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
     return path
