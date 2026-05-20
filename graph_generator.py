@@ -139,36 +139,50 @@ def _promote_metric_diversity(
     num_nodes: int,
     min_weight: float,
     max_weight: float,
+    rng: random.Random,
 ) -> None:
     """
-    Reduce chance that one path is simultaneously best for all KPIs.
+    Reduce chance that one path is simultaneously best for multiple KPIs.
     """
     source, target = 1, num_nodes
     metrics = ("cost", "time", "risk")
-    best_paths: dict[str, list[int]] = {}
-    second_paths: dict[str, list[int]] = {}
 
-    for metric in metrics:
+    def _best_k_paths(metric: str, k: int = 4) -> list[list[int]]:
         try:
             gen = nx.shortest_simple_paths(graph, source=source, target=target, weight=metric)
-            paths = list(islice(gen, 2))
+            return list(islice(gen, k))
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            return
-        if not paths:
-            return
-        best_paths[metric] = paths[0]
-        second_paths[metric] = paths[1] if len(paths) > 1 else paths[0]
+            return []
 
-    unique_best = {tuple(p) for p in best_paths.values()}
-    if len(unique_best) > 1:
-        return
+    # Several rounds of controlled reweighting to separate KPI-optimal paths.
+    for _ in range(6):
+        path_pool = {m: _best_k_paths(m, k=5) for m in metrics}
+        if any(not v for v in path_pool.values()):
+            return
 
-    shared = best_paths["cost"]
-    for metric in metrics:
-        alt = second_paths[metric]
-        if alt != shared:
-            _apply_metric_factor(graph, shared, metric, 1.18, min_weight, max_weight)
-            _apply_metric_factor(graph, alt, metric, 0.78, min_weight, max_weight)
+        best_paths = {m: path_pool[m][0] for m in metrics}
+        unique_best = {tuple(p) for p in best_paths.values()}
+        if len(unique_best) == len(metrics):
+            return
+
+        # For each metric that shares the same best path with another metric,
+        # promote an alternative path and slightly penalize the shared one.
+        for metric in metrics:
+            current_best = best_paths[metric]
+            current_best_key = tuple(current_best)
+            duplicate_count = sum(1 for p in best_paths.values() if tuple(p) == current_best_key)
+            if duplicate_count <= 1:
+                continue
+
+            alternatives = [p for p in path_pool[metric][1:] if tuple(p) != current_best_key]
+            if not alternatives:
+                continue
+
+            alt = rng.choice(alternatives[: min(3, len(alternatives))])
+            up_factor = 1.10 + rng.uniform(0.06, 0.14)
+            down_factor = 0.86 - rng.uniform(0.03, 0.08)
+            _apply_metric_factor(graph, current_best, metric, up_factor, min_weight, max_weight)
+            _apply_metric_factor(graph, alt, metric, down_factor, min_weight, max_weight)
 
 
 def generate_random_dag(
@@ -224,7 +238,7 @@ def generate_random_dag(
             _add_edge_with_profile(graph, u, v, rng, min_weight, max_weight, num_nodes)
 
     _ensure_minimum_route_diversity(graph, rng, min_weight, max_weight, num_nodes)
-    _promote_metric_diversity(graph, num_nodes, min_weight, max_weight)
+    _promote_metric_diversity(graph, num_nodes, min_weight, max_weight, rng)
 
     assert nx.is_directed_acyclic_graph(graph)
     assert nx.has_path(graph, 1, num_nodes)
