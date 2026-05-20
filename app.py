@@ -27,6 +27,8 @@ from path_optimizer import (
     optimal_paths_summary,
     rank_paths,
     shortest_path_by_cost,
+    shortest_path_by_risk,
+    shortest_path_by_time,
 )
 from session_manager import initialize_session, render_session_io, reset_session, set_graph
 from utils import (
@@ -39,6 +41,45 @@ from utils import (
 
 KPI_OPTIONS = ["cost", "time", "risk"]
 KPI_LABELS = {"cost": "затраты", "time": "время", "risk": "риск"}
+
+
+def _parse_path_string(path_str: str) -> list[int]:
+    if not path_str or path_str == "N/A":
+        return []
+    s = str(path_str).strip()
+    sep = " → " if " → " in s else ("→" if "→" in s else "-")
+    return [int(x.strip()) for x in s.split(sep)]
+
+
+def _render_graph_highlight(
+    graph,
+    path: list[int] | None,
+    viz_backend: str,
+    edge_font_size: int,
+) -> None:
+    """Отрисовка графа с подсветкой маршрута (общий блок для нескольких вкладок)."""
+    hp = path if path else None
+    if viz_backend == "Graphviz":
+        st.graphviz_chart(
+            visualize_graph_graphviz(graph, highlight_path=hp),
+            use_container_width=True,
+        )
+    elif viz_backend == "Plotly":
+        st.plotly_chart(
+            visualize_graph_plotly(graph, highlight_path=hp, edge_font_size=edge_font_size),
+            use_container_width=True,
+        )
+    elif viz_backend == "Matplotlib":
+        st.pyplot(
+            visualize_graph_matplotlib(graph, highlight_path=hp, edge_font_size=edge_font_size)
+        )
+    else:
+        st.components.v1.html(
+            visualize_graph_pyvis(graph, highlight_path=hp, edge_font_size=edge_font_size),
+            height=520,
+            scrolling=True,
+        )
+
 
 st.set_page_config(
     page_title="SCM KPI Optimizer",
@@ -73,6 +114,13 @@ with st.sidebar:
         "**SCM KPI Optimizer** — приложение для анализа транспортной SCM-сети (DAG) "
         "по показателям **затраты**, **время**, **риск**."
     )
+    st.markdown(
+        "**Сценарий (по шагам):**\n"
+        "1. Модель сети — генерация и визуализация.\n"
+        "2. Оптимумы по KPI — три кратчайших пути (Дейкстра).\n"
+        "3. Якорь и баланс — допуск и сбалансированный маршрут.\n"
+        "4. Оценка отклонений — сравнение с оптимумами и пороги 20%/25%."
+    )
     render_session_io()
     if st.button("Сбросить всё", use_container_width=True):
         reset_session()
@@ -86,8 +134,9 @@ with st.sidebar:
 
 st.title("📊 SCM KPI Optimizer")
 st.caption(
-    "Приложение формирует ориентированный DAG, рассчитывает маршруты по затратам / времени / риску "
-    "и подбирает сбалансированный путь с якорным KPI и допустимым отклонением."
+    "Этапная демонстрация: модель сети (источник 1 → сток — последний узел), "
+    "отдельные оптимумы по стоимости, времени и риску, затем якорный KPI с допуском 10–15% "
+    "и оценка отклонений выбранного маршрута."
 )
 
 source = int(st.session_state["source"])
@@ -106,9 +155,20 @@ m2.metric("Рёбер", summary.get("edges", 0))
 m3.metric("Это DAG?", "Да" if summary.get("is_dag") else "Нет")
 m4.metric(f"Путь {source}→{target}", "Есть" if summary.get("has_path") else "Нет")
 
-tab_graph, tab_opt, tab_kpi = st.tabs(["Граф и визуализация", "Маршруты", "KPI"])
+tab_graph, tab_optima, tab_anchor, tab_kpi = st.tabs(
+    [
+        "1. Модель сети",
+        "2. Оптимумы по KPI",
+        "3. Якорь и баланс",
+        "4. Оценка отклонений",
+    ]
+)
 
 with tab_graph:
+    st.markdown(
+        "**Шаг 1.** Задайте транспортную сеть как DAG: сгенерируйте граф или загрузите сессию. "
+        "Проверьте таблицу дуг (веса *c*, *t*, *r* — чем меньше, тем лучше) и визуализацию."
+    )
     st.subheader("Формирование графа")
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -171,37 +231,57 @@ with tab_graph:
             highlight = []
             st.session_state["highlight_path"] = []
 
-        if viz_backend == "Graphviz":
-            dot = visualize_graph_graphviz(graph, highlight_path=highlight or None)
-            st.graphviz_chart(dot, use_container_width=True)
-        elif viz_backend == "Plotly":
-            st.plotly_chart(
-                visualize_graph_plotly(
-                    graph,
-                    highlight_path=highlight or None,
-                    edge_font_size=edge_font_size,
-                ),
-                use_container_width=True,
-            )
-        elif viz_backend == "Matplotlib":
-            fig = visualize_graph_matplotlib(
-                graph,
-                highlight_path=highlight or None,
-                edge_font_size=edge_font_size,
-            )
-            st.pyplot(fig)
-        else:
-            html = visualize_graph_pyvis(
-                graph,
-                highlight_path=highlight or None,
-                edge_font_size=edge_font_size,
-            )
-            st.components.v1.html(html, height=520, scrolling=True)
+        _render_graph_highlight(graph, highlight or None, viz_backend, edge_font_size)
 
-with tab_opt:
-    st.subheader("Оптимизация маршрутов")
+with tab_optima:
+    st.markdown(
+        "**Шаг 2.** Для каждого критерия отдельно вычисляется кратчайший путь "
+        "(алгоритм Дейкстры, `networkx.shortest_path` с весом *cost* / *time* / *risk*). "
+        "Сравните три маршрута и при необходимости подсветьте выбранный на схеме."
+    )
+    st.subheader("Оптимальные маршруты по отдельным KPI")
     if graph is None:
-        st.info("Сначала сформируйте граф.")
+        st.info("Сначала выполните шаг 1: сформируйте граф на вкладке «1. Модель сети».")
+    else:
+        optimal_df_raw = optimal_paths_summary(graph, source, target)
+        st.dataframe(
+            localize_optimal_df(optimal_df_raw),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        paths_by_kpi: dict[str, list[int]] = {}
+        for _, row in optimal_df_raw.iterrows():
+            k = str(row["kpi"])
+            paths_by_kpi[k] = _parse_path_string(str(row.get("path", "")))
+
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            highlight_choice = st.radio(
+                "Подсветить на схеме маршрут, оптимальный по",
+                ["Не подсвечивать", "затраты (cost)", "время (time)", "риск (risk)"],
+                horizontal=False,
+            )
+        with col_b:
+            viz_backend_o = st.session_state.get("viz_backend", "Graphviz")
+            edge_fs_o = int(st.session_state.get("edge_font_size", 11))
+            if highlight_choice == "Не подсвечивать":
+                _render_graph_highlight(graph, None, viz_backend_o, edge_fs_o)
+            else:
+                key = {"затраты (cost)": "cost", "время (time)": "time", "риск (risk)": "risk"}[
+                    highlight_choice
+                ]
+                ph = paths_by_kpi.get(key, [])
+                _render_graph_highlight(graph, ph if ph else None, viz_backend_o, edge_fs_o)
+
+with tab_anchor:
+    st.markdown(
+        "**Шаг 3.** Выберите **якорный KPI** и допуск **10–15%** относительно его оптимального значения. "
+        "Система отберёт среди допустимых маршрутов вариант с более сбалансированными остальными показателями."
+    )
+    st.subheader("Якорный KPI и сбалансированный маршрут")
+    if graph is None:
+        st.info("Сначала выполните шаг 1: сформируйте граф.")
     else:
         anchor_ix = KPI_OPTIONS.index(st.session_state.get("selected_anchor_kpi", "cost"))
         st.session_state["selected_anchor_kpi"] = st.selectbox(
@@ -251,42 +331,12 @@ with tab_opt:
             o3.metric("Риск", f"{bm.get('total_risk', 0):.2f}")
             o4.metric("Баланс", f"{bm.get('balance_score', 0):.4f}")
 
-            st.markdown("**Визуализация оптимального маршрута (якорный KPI)**")
+            st.markdown("**Визуализация: оптимальный маршрут по якорному KPI**")
             viz_backend = st.session_state.get("viz_backend", "Graphviz")
             anchor_optimal_path = balanced.get("optimal_anchor_path", [])
-            if viz_backend == "Graphviz":
-                dot = visualize_graph_graphviz(graph, highlight_path=anchor_optimal_path or None)
-                st.graphviz_chart(dot, use_container_width=True)
-            elif viz_backend == "Plotly":
-                st.plotly_chart(
-                    visualize_graph_plotly(
-                        graph,
-                        highlight_path=anchor_optimal_path or None,
-                        edge_font_size=edge_font_size,
-                    ),
-                    use_container_width=True,
-                )
-            elif viz_backend == "Matplotlib":
-                fig = visualize_graph_matplotlib(
-                    graph,
-                    highlight_path=anchor_optimal_path or None,
-                    edge_font_size=edge_font_size,
-                )
-                st.pyplot(fig)
-            else:
-                html = visualize_graph_pyvis(
-                    graph,
-                    highlight_path=anchor_optimal_path or None,
-                    edge_font_size=edge_font_size,
-                )
-                st.components.v1.html(html, height=520, scrolling=True)
+            _render_graph_highlight(graph, anchor_optimal_path or None, viz_backend, edge_font_size)
 
-            st.markdown("**Лучшие маршруты по одному KPI**")
-            st.dataframe(
-                localize_optimal_df(res.get("optimal_paths")),
-                use_container_width=True,
-                hide_index=True,
-            )
+            st.caption("Сводка по отдельным KPI см. на шаге 2.")
             st.markdown("**Все маршруты (рейтинг)**")
             st.dataframe(
                 localize_paths_df(res.get("ranked_paths")),
@@ -295,16 +345,51 @@ with tab_opt:
             )
 
 with tab_kpi:
+    st.markdown(
+        "**Шаг 4.** Сравните итоговые суммы по сбалансированному маршруту с индивидуальными оптимумами, "
+        "оцените отклонения в процентах и правила приёмки: до **20%** — допустимо, до **25%** — условно, "
+        "иначе смените якорный KPI или допуск и повторите шаг 3."
+    )
     st.subheader("Разбор KPI")
     if graph is None or not st.session_state.get("optimization_results"):
-        st.info("Сначала выполните оптимизацию на вкладке «Маршруты».")
+        st.info("Сначала выполните шаг 3: расчёт на вкладке «3. Якорь и баланс».")
     else:
         balanced = st.session_state["optimization_results"]["balanced"]
         current_path = balanced.get("balanced_path", [])
         current_m = calculate_path_metrics(graph, current_path)
+
+        st.markdown("**С чем сравниваем**")
+        st.markdown(
+            "- **Текущий маршрут** — сбалансированный путь с шага 3 (суммы *затраты* / *время* / *риск* по его дугам).\n"
+            "- **Оптимум по каждому KPI** — отдельно: минимально возможная сумма по этому показателю среди всех "
+            "маршрутов из источника в сток (кратчайший путь по весу `cost`, `time` или `risk`, алгоритм Дейкстры). "
+            "Три оптимума в общем случае относятся к **разным** маршрутам; в таблице ниже для каждой строки KPI "
+            "в столбце «оптимум» указано именно **индивидуальное** лучшее значение по этому показателю.\n"
+            "- **Отклонение %** — отношение прироста к оптимуму в процентах: "
+            "(текущий − оптимум) / оптимум × 100. "
+            "Чем меньше значение показателя, тем лучше; положительное отклонение означает ухудшение относительно "
+            "идеала по данному KPI."
+        )
+
         try:
-            optimal_path = shortest_path_by_cost(graph, source, target)
-            optimal_m = calculate_path_metrics(graph, optimal_path)
+            p_cost = shortest_path_by_cost(graph, source, target)
+            m_cost = calculate_path_metrics(graph, p_cost)
+            p_time = shortest_path_by_time(graph, source, target)
+            m_time = calculate_path_metrics(graph, p_time)
+            p_risk = shortest_path_by_risk(graph, source, target)
+            m_risk = calculate_path_metrics(graph, p_risk)
+            optimal_m = {
+                "total_cost": m_cost["total_cost"],
+                "total_time": m_time["total_time"],
+                "total_risk": m_risk["total_risk"],
+            }
+            with st.expander("Маршруты, на которых достигаются индивидуальные оптимумы"):
+                st.markdown(
+                    f"| KPI | Маршрут |\n|-----|--------|\n"
+                    f"| Затраты | `{' → '.join(map(str, p_cost))}` |\n"
+                    f"| Время | `{' → '.join(map(str, p_time))}` |\n"
+                    f"| Риск | `{' → '.join(map(str, p_risk))}` |"
+                )
         except Exception:
             optimal_m = current_m
 
@@ -328,6 +413,8 @@ with tab_kpi:
         else:
             st.success(kpi_summary["explanation"])
 
+        st.markdown("**Таблица сравнения** — по каждой строке: текущие суммы сбалансированного маршрута, "
+                    "индивидуальный оптимум по этому KPI, отклонение в % и статус (20% / 25%).")
         st.dataframe(localize_balance_df(balance_df), use_container_width=True, hide_index=True)
         anchor_ru = KPI_RU.get(anchor_info["anchor_kpi"], anchor_info["anchor_kpi"])
         st.markdown(f"**Совет по якорю:** {anchor_ru} — {anchor_info['reason']}")
