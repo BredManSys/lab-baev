@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import networkx as nx
+import pandas as pd
 import streamlit as st
 
 from graph_generator import graph_summary
@@ -101,6 +102,21 @@ def set_graph(graph: nx.DiGraph | None) -> None:
     _sync_graph_derived(graph)
 
 
+def _to_json_safe(value: Any) -> Any:
+    """Convert nested values to JSON-serializable representation."""
+    if isinstance(value, pd.DataFrame):
+        return value.to_dict(orient="records")
+    if isinstance(value, pd.Series):
+        return value.to_list()
+    if isinstance(value, dict):
+        return {str(k): _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 def save_session_to_json() -> str:
     """Serialize session to JSON string for download."""
     graph = st.session_state.get("graph")
@@ -119,7 +135,7 @@ def save_session_to_json() -> str:
         "edge_font_size": st.session_state.get("edge_font_size", 11),
         "summary": graph_summary(graph) if graph is not None else {},
     }
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    return json.dumps(_to_json_safe(payload), indent=2, ensure_ascii=False)
 
 
 def load_session_from_json(json_str: str) -> tuple[bool, str]:

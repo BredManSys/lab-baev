@@ -92,7 +92,6 @@ st.caption(
 
 source = int(st.session_state["source"])
 target = int(st.session_state["target"])
-graph_density = float(st.session_state.get("graph_density", 1.2))
 edge_font_size = int(st.session_state.get("edge_font_size", 11))
 highlight = st.session_state.get("highlight_path") or []
 
@@ -138,19 +137,18 @@ with tab_viz:
     if graph is None:
         st.info("Сначала сформируйте граф на вкладке «Граф».")
     else:
-        col_v1, col_v2, col_v3 = st.columns(3)
+        col_v1, col_v2 = st.columns(2)
         with col_v1:
-            viz_backend = st.selectbox("Как рисовать граф", ["Graphviz", "Plotly", "Matplotlib", "Pyvis"])
-        with col_v2:
-            st.session_state["graph_density"] = st.slider(
-                "Плотность/разлёт графа",
-                min_value=0.6,
-                max_value=2.2,
-                value=float(st.session_state.get("graph_density", 1.2)),
-                step=0.1,
-                help="Чем больше значение, тем больше расстояние между узлами.",
+            backend_ix = ["Graphviz", "Plotly", "Matplotlib", "Pyvis"].index(
+                st.session_state.get("viz_backend", "Graphviz")
             )
-        with col_v3:
+            st.session_state["viz_backend"] = st.selectbox(
+                "Как рисовать граф",
+                ["Graphviz", "Plotly", "Matplotlib", "Pyvis"],
+                index=backend_ix,
+            )
+            viz_backend = st.session_state["viz_backend"]
+        with col_v2:
             st.session_state["edge_font_size"] = st.slider(
                 "Размер шрифта весов",
                 min_value=7,
@@ -159,7 +157,6 @@ with tab_viz:
                 step=1,
                 help="Размер подписей KPI на ребрах.",
             )
-        graph_density = float(st.session_state.get("graph_density", 1.2))
         edge_font_size = int(st.session_state.get("edge_font_size", 11))
 
         path_options = ["— не подсвечивать —"] + [
@@ -182,7 +179,6 @@ with tab_viz:
                 visualize_graph_plotly(
                     graph,
                     highlight_path=highlight or None,
-                    density=graph_density,
                     edge_font_size=edge_font_size,
                 ),
                 use_container_width=True,
@@ -191,7 +187,6 @@ with tab_viz:
             fig = visualize_graph_matplotlib(
                 graph,
                 highlight_path=highlight or None,
-                density=graph_density,
                 edge_font_size=edge_font_size,
             )
             st.pyplot(fig)
@@ -199,7 +194,6 @@ with tab_viz:
             html = visualize_graph_pyvis(
                 graph,
                 highlight_path=highlight or None,
-                density=graph_density,
                 edge_font_size=edge_font_size,
             )
             st.components.v1.html(html, height=520, scrolling=True)
@@ -248,12 +242,44 @@ with tab_opt:
             balanced = res.get("balanced", {})
             st.markdown("**Сбалансированный маршрут**")
             st.code(" → ".join(map(str, balanced.get("balanced_path", []))))
+            st.markdown("**Оптимальный маршрут по якорному KPI**")
+            st.code(" → ".join(map(str, balanced.get("optimal_anchor_path", []))))
             bm = balanced.get("balanced_metrics", {})
             o1, o2, o3, o4 = st.columns(4)
             o1.metric("Затраты", f"{bm.get('total_cost', 0):.2f}")
             o2.metric("Время", f"{bm.get('total_time', 0):.2f}")
             o3.metric("Риск", f"{bm.get('total_risk', 0):.2f}")
             o4.metric("Баланс", f"{bm.get('balance_score', 0):.4f}")
+
+            st.markdown("**Визуализация оптимального маршрута (якорный KPI)**")
+            viz_backend = st.session_state.get("viz_backend", "Graphviz")
+            anchor_optimal_path = balanced.get("optimal_anchor_path", [])
+            if viz_backend == "Graphviz":
+                dot = visualize_graph_graphviz(graph, highlight_path=anchor_optimal_path or None)
+                st.graphviz_chart(dot, use_container_width=True)
+            elif viz_backend == "Plotly":
+                st.plotly_chart(
+                    visualize_graph_plotly(
+                        graph,
+                        highlight_path=anchor_optimal_path or None,
+                        edge_font_size=edge_font_size,
+                    ),
+                    use_container_width=True,
+                )
+            elif viz_backend == "Matplotlib":
+                fig = visualize_graph_matplotlib(
+                    graph,
+                    highlight_path=anchor_optimal_path or None,
+                    edge_font_size=edge_font_size,
+                )
+                st.pyplot(fig)
+            else:
+                html = visualize_graph_pyvis(
+                    graph,
+                    highlight_path=anchor_optimal_path or None,
+                    edge_font_size=edge_font_size,
+                )
+                st.components.v1.html(html, height=520, scrolling=True)
 
             st.markdown("**Лучшие маршруты по одному KPI**")
             st.dataframe(
