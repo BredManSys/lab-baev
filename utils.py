@@ -70,7 +70,7 @@ def localize_paths_df(df: pd.DataFrame) -> pd.DataFrame:
         "total_cost": "затраты",
         "total_time": "время",
         "total_risk": "риск",
-        "balance_score": "баланс",
+        "total_deviation": "сумм. откл., %",
     }
     cols = {k: v for k, v in rename.items() if k in df.columns}
     out = df.rename(columns=cols)

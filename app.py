@@ -329,7 +329,17 @@ with tab_anchor:
             o1.metric("Затраты", f"{bm.get('total_cost', 0):.2f}")
             o2.metric("Время", f"{bm.get('total_time', 0):.2f}")
             o3.metric("Риск", f"{bm.get('total_risk', 0):.2f}")
-            o4.metric("Баланс", f"{bm.get('balance_score', 0):.4f}")
+            status_ru = {
+                "accepted": "принято",
+                "conditionally_accepted": "условно",
+                "rejected": "отклонено",
+            }.get(str(balanced.get("solution_status", "")), "—")
+            o4.metric("Статус решения", status_ru)
+            st.metric(
+                "Суммарное отклонение KPI, %",
+                f"{bm.get('total_deviation', 0):.2f}",
+                help="Сумма отклонений затрат, времени и риска от индивидуальных оптимумов.",
+            )
 
             st.markdown("**Визуализация: оптимальный маршрут по якорному KPI**")
             viz_backend = st.session_state.get("viz_backend", "Graphviz")
@@ -371,18 +381,24 @@ with tab_kpi:
             "идеала по данному KPI."
         )
 
+        optimal_m = balanced.get("per_kpi_optima")
         try:
-            p_cost = shortest_path_by_cost(graph, source, target)
-            m_cost = calculate_path_metrics(graph, p_cost)
-            p_time = shortest_path_by_time(graph, source, target)
-            m_time = calculate_path_metrics(graph, p_time)
-            p_risk = shortest_path_by_risk(graph, source, target)
-            m_risk = calculate_path_metrics(graph, p_risk)
-            optimal_m = {
-                "total_cost": m_cost["total_cost"],
-                "total_time": m_time["total_time"],
-                "total_risk": m_risk["total_risk"],
-            }
+            if not optimal_m:
+                p_cost = shortest_path_by_cost(graph, source, target)
+                m_cost = calculate_path_metrics(graph, p_cost)
+                p_time = shortest_path_by_time(graph, source, target)
+                m_time = calculate_path_metrics(graph, p_time)
+                p_risk = shortest_path_by_risk(graph, source, target)
+                m_risk = calculate_path_metrics(graph, p_risk)
+                optimal_m = {
+                    "total_cost": m_cost["total_cost"],
+                    "total_time": m_time["total_time"],
+                    "total_risk": m_risk["total_risk"],
+                }
+            else:
+                p_cost = shortest_path_by_cost(graph, source, target)
+                p_time = shortest_path_by_time(graph, source, target)
+                p_risk = shortest_path_by_risk(graph, source, target)
             with st.expander("Маршруты, на которых достигаются индивидуальные оптимумы"):
                 st.markdown(
                     f"| KPI | Маршрут |\n|-----|--------|\n"
@@ -394,14 +410,19 @@ with tab_kpi:
             optimal_m = current_m
 
         balance_df = analyze_kpi_balance(current_m, optimal_m)
-        kpi_summary = generate_kpi_summary(balance_df)
+        kpi_summary = generate_kpi_summary(
+            balance_df,
+            solution_status=balanced.get("solution_status"),
+        )
         ranked_df = st.session_state["optimization_results"].get("ranked_paths", pd.DataFrame())
         paths_metrics = []
         if not ranked_df.empty and "nodes" in ranked_df.columns:
             for nodes in ranked_df["nodes"]:
                 paths_metrics.append(calculate_path_metrics(graph, nodes))
         anchor_info = recommend_anchor_kpi(paths_metrics or [current_m])
-        recommendations = build_recommendations(kpi_summary, anchor_info, balance_df)
+        recommendations = build_recommendations(
+            kpi_summary, anchor_info, balance_df, balanced_result=balanced
+        )
 
         v1, v2, v3 = st.columns(3)
         v1.metric("Принято", kpi_summary["accepted"])

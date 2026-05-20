@@ -143,7 +143,7 @@ def generate_pdf_report(
             Paragraph(
                 f"Маршрут: {' → '.join(map(str, balanced_result.get('balanced_path', [])))}<br/>"
                 f"Затраты: {bm.get('total_cost', '—')} | Время: {bm.get('total_time', '—')} | "
-                f"Риск: {bm.get('total_risk', '—')} | Баланс: {bm.get('balance_score', '—')}",
+                f"Риск: {bm.get('total_risk', '—')} | Сумм. откл.: {bm.get('total_deviation', '—')}%",
                 body_style,
             )
         )
