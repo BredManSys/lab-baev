@@ -33,11 +33,34 @@ def _layout(graph: nx.DiGraph) -> dict[int, tuple[float, float]]:
     try:
         if nx.is_directed_acyclic_graph(graph):
             generations = list(nx.topological_generations(graph))
-            dag = graph.copy()
+            # Layered initial positions: keep direction left->right and spread nodes in each layer.
+            init_pos: dict[int, tuple[float, float]] = {}
+            layer_of: dict[int, int] = {}
+            total_layers = max(1, len(generations) - 1)
             for layer, nodes in enumerate(generations):
-                for node in nodes:
-                    dag.nodes[node]["layer"] = layer
-            return nx.multipartite_layout(dag, subset_key="layer", align="horizontal", scale=3.0)
+                layer_of.update({node: layer for node in nodes})
+                count = max(1, len(nodes))
+                for idx, node in enumerate(sorted(nodes)):
+                    x = layer / total_layers
+                    y = 0.0 if count == 1 else (idx / (count - 1)) * 2.0 - 1.0
+                    init_pos[node] = (x, y)
+
+            spring_k = max(0.9, 2.8 / (graph.number_of_nodes() ** 0.5))
+            relaxed = nx.spring_layout(
+                graph.to_undirected(),
+                seed=42,
+                pos=init_pos,
+                k=spring_k,
+                iterations=300,
+            )
+            # Blend relaxed coordinates with layer positions: preserve direction but avoid one-line layout.
+            return {
+                node: (
+                    0.68 * (layer_of[node] / total_layers) + 0.32 * relaxed[node][0],
+                    relaxed[node][1],
+                )
+                for node in graph.nodes()
+            }
         k = max(1.5, 3.0 / (graph.number_of_nodes() ** 0.5))
         return nx.spring_layout(graph, seed=42, k=k, iterations=300)
     except nx.NetworkXError:
