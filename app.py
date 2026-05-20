@@ -9,6 +9,7 @@ import streamlit as st
 
 from graph_generator import generate_random_dag, graph_summary
 from graph_visualizer import (
+    visualize_graph_graphviz,
     visualize_graph_matplotlib,
     visualize_graph_plotly,
     visualize_graph_pyvis,
@@ -139,7 +140,7 @@ with tab_viz:
     else:
         col_v1, col_v2, col_v3 = st.columns(3)
         with col_v1:
-            viz_backend = st.selectbox("Как рисовать граф", ["Plotly", "Matplotlib", "Pyvis"])
+            viz_backend = st.selectbox("Как рисовать граф", ["Graphviz", "Plotly", "Matplotlib", "Pyvis"])
         with col_v2:
             st.session_state["graph_density"] = st.slider(
                 "Плотность/разлёт графа",
@@ -173,7 +174,10 @@ with tab_viz:
             highlight = []
             st.session_state["highlight_path"] = []
 
-        if viz_backend == "Plotly":
+        if viz_backend == "Graphviz":
+            dot = visualize_graph_graphviz(graph, highlight_path=highlight or None)
+            st.graphviz_chart(dot, use_container_width=True)
+        elif viz_backend == "Plotly":
             st.plotly_chart(
                 visualize_graph_plotly(
                     graph,

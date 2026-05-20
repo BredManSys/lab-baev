@@ -27,42 +27,56 @@ def _edge_labels(graph: nx.DiGraph) -> dict[tuple[int, int], str]:
     return labels
 
 
+def visualize_graph_graphviz(
+    graph: nx.DiGraph,
+    highlight_path: list[int] | None = None,
+) -> str:
+    """Render directed graph as Graphviz DOT source."""
+    path_nodes = set(highlight_path or [])
+    path_edges: set[tuple[int, int]] = set()
+    if highlight_path and len(highlight_path) > 1:
+        path_edges = {(highlight_path[i], highlight_path[i + 1]) for i in range(len(highlight_path) - 1)}
+
+    source = min(graph.nodes()) if graph.number_of_nodes() else None
+    target = max(graph.nodes()) if graph.number_of_nodes() else None
+    lines = [
+        "digraph SCM {",
+        '  graph [rankdir=LR, bgcolor="#1e1e1e", splines=true, overlap=false, nodesep=0.5, ranksep=0.8];',
+        '  node [shape=circle, style=filled, fontname="Helvetica", fontsize=12, fontcolor="white", color="#dbeafe", fillcolor="#3498db"];',
+        '  edge [fontname="Helvetica", fontsize=10, fontcolor="#ecf0f1", color="#95a5a6", arrowsize=0.7];',
+    ]
+
+    for n in sorted(graph.nodes()):
+        attrs: list[str] = [f'label="{n}"']
+        if n in path_nodes:
+            attrs.extend(['fillcolor="#e67e22"', 'penwidth=2.0'])
+        if n == source:
+            attrs.extend(['shape=doublecircle', 'color="#34d399"'])
+        elif n == target:
+            attrs.extend(['shape=doublecircle', 'color="#f87171"'])
+        lines.append(f'  "{n}" [{", ".join(attrs)}];')
+
+    for u, v, d in graph.edges(data=True):
+        lbl = f'c:{d.get("cost", 0):.1f}  t:{d.get("time", 0):.1f}  r:{d.get("risk", 0):.1f}'
+        edge_attrs = [f'label="{lbl}"']
+        if (u, v) in path_edges:
+            edge_attrs.extend(['color="#e74c3c"', "penwidth=2.6"])
+        lines.append(f'  "{u}" -> "{v}" [{", ".join(edge_attrs)}];')
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def _layout(graph: nx.DiGraph) -> dict[int, tuple[float, float]]:
     if graph.number_of_nodes() == 0:
         return {}
     try:
-        if nx.is_directed_acyclic_graph(graph):
-            generations = list(nx.topological_generations(graph))
-            # Layered initial positions: keep direction left->right and spread nodes in each layer.
-            init_pos: dict[int, tuple[float, float]] = {}
-            layer_of: dict[int, int] = {}
-            total_layers = max(1, len(generations) - 1)
-            for layer, nodes in enumerate(generations):
-                layer_of.update({node: layer for node in nodes})
-                count = max(1, len(nodes))
-                for idx, node in enumerate(sorted(nodes)):
-                    x = layer / total_layers
-                    y = 0.0 if count == 1 else (idx / (count - 1)) * 2.0 - 1.0
-                    init_pos[node] = (x, y)
-
-            spring_k = max(0.9, 2.8 / (graph.number_of_nodes() ** 0.5))
-            relaxed = nx.spring_layout(
-                graph.to_undirected(),
-                seed=42,
-                pos=init_pos,
-                k=spring_k,
-                iterations=300,
-            )
-            # Blend relaxed coordinates with layer positions: preserve direction but avoid one-line layout.
-            return {
-                node: (
-                    0.68 * (layer_of[node] / total_layers) + 0.32 * relaxed[node][0],
-                    relaxed[node][1],
-                )
-                for node in graph.nodes()
-            }
-        k = max(1.5, 3.0 / (graph.number_of_nodes() ** 0.5))
-        return nx.spring_layout(graph, seed=42, k=k, iterations=300)
+        # Use force-directed layout as the default for all graphs:
+        # it produces a natural transport-network shape and avoids line-like stacking.
+        n = max(1, graph.number_of_nodes())
+        k = max(1.25, 4.0 / (n ** 0.5))
+        base_graph = graph.to_undirected() if nx.is_directed_acyclic_graph(graph) else graph
+        return nx.spring_layout(base_graph, seed=42, k=k, iterations=450)
     except nx.NetworkXError:
         return nx.circular_layout(graph, scale=2.5)
 
