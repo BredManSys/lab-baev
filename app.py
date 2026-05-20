@@ -148,7 +148,6 @@ st.markdown(
 )
 
 initialize_session()
-graph = st.session_state.get("graph")
 
 with st.sidebar:
     st.title("SCM KPI Optimizer")
@@ -166,14 +165,16 @@ with st.sidebar:
     st.markdown("**Маршрутизация в сети**")
     st.session_state["source"] = 1
     st.number_input("Источник (узел)", min_value=1, value=1, disabled=True)
+    _g = st.session_state.get("graph")
     max_target = (
-        int(max(graph.nodes()))
-        if graph is not None and graph.number_of_nodes()
+        int(max(_g.nodes()))
+        if _g is not None and _g.number_of_nodes()
         else int(st.session_state["target"])
     )
     st.session_state["target"] = max_target
     st.number_input("Сток (узел)", min_value=1, value=max_target, disabled=True)
 
+graph = st.session_state.get("graph")
 source = int(st.session_state["source"])
 target = int(st.session_state["target"])
 
@@ -312,25 +313,26 @@ with tab_anchor:
         st.warning("Сначала выполните этап **① Модель сети**.")
     else:
         st.subheader("Параметры расчёта")
+        if "selected_anchor_kpi" not in st.session_state:
+            st.session_state["selected_anchor_kpi"] = "cost"
+        if "relaxation_percent" not in st.session_state:
+            st.session_state["relaxation_percent"] = 12.0
         p1, p2 = st.columns(2)
         with p1:
-            anchor_ix = KPI_OPTIONS.index(st.session_state.get("selected_anchor_kpi", "cost"))
-            st.session_state["selected_anchor_kpi"] = st.selectbox(
+            st.selectbox(
                 "Якорный KPI",
                 KPI_OPTIONS,
-                index=anchor_ix,
                 format_func=lambda k: KPI_LABELS[k],
-                key="anchor_kpi_select",
+                key="selected_anchor_kpi",
                 help="Главный критерий, для которого задаётся допуск от абсолютного оптимума.",
             )
         with p2:
-            st.session_state["relaxation_percent"] = st.slider(
+            st.slider(
                 "Допуск по якорю, %",
                 10.0,
                 15.0,
-                float(st.session_state.get("relaxation_percent", 12.0)),
                 0.5,
-                key="relaxation_pct_slider",
+                key="relaxation_percent",
             )
 
         if st.button("Рассчитать итоговый маршрут", type="primary", use_container_width=True):

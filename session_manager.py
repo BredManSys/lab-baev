@@ -51,21 +51,63 @@ def _graph_to_serializable(graph: nx.DiGraph | None) -> dict[str, Any] | None:
     }
 
 
+def _as_int_node(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    return int(str(value).strip())
+
+
 def _graph_from_serializable(data: dict[str, Any] | None) -> nx.DiGraph | None:
     if not data:
         return None
     g = nx.DiGraph()
     for n in data.get("nodes", []):
-        g.add_node(n)
+        g.add_node(_as_int_node(n))
     for e in data.get("edges", []):
         g.add_edge(
-            e["source"],
-            e["target"],
-            cost=e.get("cost", 1),
-            time=e.get("time", 1),
-            risk=e.get("risk", 1),
+            _as_int_node(e["source"]),
+            _as_int_node(e["target"]),
+            cost=float(e.get("cost", 1)),
+            time=float(e.get("time", 1)),
+            risk=float(e.get("risk", 1)),
         )
     return g
+
+
+def _coerce_dataframe(value: Any) -> pd.DataFrame:
+    if value is None:
+        return pd.DataFrame()
+    if isinstance(value, pd.DataFrame):
+        return value
+    if isinstance(value, list):
+        return pd.DataFrame(value)
+    return pd.DataFrame()
+
+
+def _restore_optimization_results(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    out = dict(raw)
+    for key in ("ranked_paths", "optimal_paths"):
+        if key in out:
+            out[key] = _coerce_dataframe(out[key])
+    return out
+
+
+def _sync_ui_widget_keys() -> None:
+    """Синхронизировать ключи виджетов Streamlit с загруженным session_state."""
+    anchor = st.session_state.get("selected_anchor_kpi", "cost")
+    if anchor not in ("cost", "time", "risk"):
+        anchor = "cost"
+    st.session_state["selected_anchor_kpi"] = anchor
+    st.session_state["relaxation_percent"] = float(
+        st.session_state.get("relaxation_percent", 12.0)
+    )
+    vb = st.session_state.get("viz_backend", "Graphviz")
+    if vb not in ("Graphviz", "Pyvis"):
+        vb = "Graphviz"
+        st.session_state["viz_backend"] = vb
+    st.session_state["edge_font_size"] = int(st.session_state.get("edge_font_size", 11))
 
 
 def initialize_session() -> None:
@@ -147,15 +189,20 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
     except json.JSONDecodeError as e:
         return False, f"Некорректный JSON: {e}"
 
-    if data.get("version") != SESSION_VERSION:
+    file_version = data.get("version")
+    if file_version is not None and file_version != SESSION_VERSION:
         return False, f"Несовместимая версия сессии (требуется {SESSION_VERSION})."
 
     graph = _graph_from_serializable(data.get("graph"))
+    if graph is not None and graph.number_of_nodes() == 0:
+        graph = None
     if graph is not None and not nx.is_directed_acyclic_graph(graph):
         return False, "Граф содержит циклы и не является DAG."
 
     set_graph(graph)
-    st.session_state["optimization_results"] = data.get("optimization_results", {})
+    st.session_state["optimization_results"] = _restore_optimization_results(
+        data.get("optimization_results", {})
+    )
     st.session_state["selected_anchor_kpi"] = data.get("selected_anchor_kpi", "cost")
     st.session_state["relaxation_percent"] = float(data.get("relaxation_percent", 12.0))
     st.session_state["reports"] = data.get("reports", {})
@@ -170,6 +217,7 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
     st.session_state["edge_font_size"] = int(data.get("edge_font_size", 11))
     vb = data.get("viz_backend", "Graphviz")
     st.session_state["viz_backend"] = vb if vb in ("Graphviz", "Pyvis") else "Graphviz"
+    _sync_ui_widget_keys()
     return True, "Сессия успешно загружена."
 
 
@@ -178,6 +226,8 @@ def reset_session() -> None:
     for key, value in DEFAULT_STATE.items():
         st.session_state[key] = value if key != "graph" else None
     _sync_graph_derived(None)
+    st.session_state.pop("_session_upload_sig", None)
+    _sync_ui_widget_keys()
 
 
 def render_session_io() -> None:
@@ -189,10 +239,19 @@ def render_session_io() -> None:
         file_name="scm_kpi_session.json",
         mime="application/json",
     )
-    uploaded = st.sidebar.file_uploader("Загрузить сессию (.json)", type=["json"])
+    uploaded = st.sidebar.file_uploader(
+        "Загрузить сессию (.json)",
+        type=["json"],
+        key="session_file_uploader",
+    )
     if uploaded is not None:
-        ok, msg = load_session_from_json(uploaded.getvalue().decode("utf-8"))
-        if ok:
-            st.sidebar.success(msg)
-        else:
-            st.sidebar.error(msg)
+        raw = uploaded.getvalue()
+        sig = (uploaded.name, len(raw))
+        if st.session_state.get("_session_upload_sig") != sig:
+            ok, msg = load_session_from_json(raw.decode("utf-8"))
+            st.session_state["_session_upload_sig"] = sig
+            if ok:
+                st.sidebar.success(msg)
+                st.rerun()
+            else:
+                st.sidebar.error(msg)
