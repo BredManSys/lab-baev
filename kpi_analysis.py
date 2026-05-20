@@ -222,9 +222,11 @@ def recommend_anchor_kpi(
     anchor = min(avg_deviations, key=avg_deviations.get)
     scores = {lbl: round(_kpi_score(avg_deviations[lbl]), 2) for lbl in labels}
     anchor_ru = {"cost": "затраты", "time": "время", "risk": "риск"}.get(anchor, anchor)
+    n = len(paths_metrics)
     reason = (
-        f"Рекомендуемый якорный KPI: «{anchor_ru}». Среднее отклонение {avg_deviations[anchor]:.1f}% "
-        f"является минимальным среди рассмотренных маршрутов."
+        f"Среди {n} маршрутов из рейтинга наименьшее среднее отклонение по KPI «{anchor_ru}» "
+        f"составляет {avg_deviations[anchor]:.1f}% (это не отклонение итогового маршрута шага 3/4). "
+        f"Для выбора якоря на шаге 3 ориентируйтесь на предметную постановку задачи."
     )
     return {"anchor_kpi": anchor, "reason": reason, "scores": scores, "avg_deviations": avg_deviations}
 

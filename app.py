@@ -18,7 +18,6 @@ from kpi_analysis import (
     analyze_kpi_balance,
     build_recommendations,
     generate_kpi_summary,
-    recommend_anchor_kpi,
 )
 from path_optimizer import (
     calculate_path_metrics,
@@ -428,14 +427,8 @@ with tab_kpi:
             balance_df,
             solution_status=balanced.get("solution_status"),
         )
-        ranked_df = st.session_state["optimization_results"].get("ranked_paths", pd.DataFrame())
-        paths_metrics = []
-        if not ranked_df.empty and "nodes" in ranked_df.columns:
-            for nodes in ranked_df["nodes"]:
-                paths_metrics.append(calculate_path_metrics(graph, nodes))
-        anchor_info = recommend_anchor_kpi(paths_metrics or [current_m])
         recommendations = build_recommendations(
-            kpi_summary, anchor_info, balance_df, balanced_result=balanced
+            kpi_summary, {}, balance_df, balanced_result=balanced
         )
 
         v1, v2, v3 = st.columns(3)
@@ -451,8 +444,16 @@ with tab_kpi:
         st.markdown("**Таблица сравнения** — по каждой строке: текущие суммы сбалансированного маршрута, "
                     "индивидуальный оптимум по этому KPI, отклонение в % и статус (20% / 25%).")
         st.dataframe(localize_balance_df(balance_df), use_container_width=True, hide_index=True)
-        anchor_ru = KPI_RU.get(anchor_info["anchor_kpi"], anchor_info["anchor_kpi"])
-        st.markdown(f"**Совет по якорю:** {anchor_ru} — {anchor_info['reason']}")
+
+        used_anchor = balanced.get("requested_anchor_kpi") or balanced.get("anchor_kpi", "cost")
+        used_relax = balanced.get("requested_relaxation_percent", balanced.get("relaxation_percent"))
+        anchor_ru = KPI_LABELS.get(str(used_anchor), str(used_anchor))
+        st.markdown(
+            f"**Параметры расчёта (шаг 3):** якорный KPI — **{anchor_ru}**, "
+            f"допуск **{float(used_relax):.1f}%**. "
+            f"Отклонения в таблице выше относятся **только к итоговому маршруту**, "
+            f"а не к среднему по всем путям сети."
+        )
         for rec in recommendations:
             st.markdown(f"- {rec}")
 
@@ -460,5 +461,5 @@ with tab_kpi:
             "kpi_balance_df": localize_balance_df(balance_df),
             "kpi_summary": kpi_summary,
             "recommendations": recommendations,
-            "anchor_info": anchor_info,
+            "anchor_kpi_used": used_anchor,
         }
