@@ -8,12 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from graph_generator import generate_random_dag, graph_summary
-from graph_visualizer import (
-    visualize_graph_graphviz,
-    visualize_graph_matplotlib,
-    visualize_graph_plotly,
-    visualize_graph_pyvis,
-)
+from graph_visualizer import visualize_graph_graphviz, visualize_graph_pyvis
 from kpi_analysis import (
     analyze_kpi_balance,
     build_recommendations,
@@ -31,7 +26,7 @@ from path_optimizer import (
 )
 from session_manager import initialize_session, render_session_io, reset_session, set_graph
 from utils import (
-    KPI_RU,
+    KPI_LABELS,
     graph_to_edge_records,
     localize_balance_df,
     localize_optimal_df,
@@ -39,7 +34,27 @@ from utils import (
 )
 
 KPI_OPTIONS = ["cost", "time", "risk"]
-KPI_LABELS = {"cost": "затраты", "time": "время", "risk": "риск"}
+VIZ_BACKENDS = ["Graphviz", "Pyvis"]
+
+STEP_GOALS = {
+    1: (
+        "**Цель:** сформировать ориентированную транспортную сеть (DAG) с весами на дугах "
+        "— *затраты (c)*, *время (t)*, *риск (r)* в шкале 1–10 (меньше — лучше). "
+        "Источник — узел **1**, сток — **последний** узел графа."
+    ),
+    2: (
+        "**Цель:** для каждого KPI отдельно найти кратчайший маршрут алгоритмом **Дейкстры** "
+        "(три независимых «идеала» по затратам, времени и риску). Эти значения — эталон для шагов 3–4."
+    ),
+    3: (
+        "**Цель:** выбрать **якорный KPI** и допуск **10–15%**, отобрать маршруты с якорём не хуже порога "
+        "и получить **один итоговый маршрут** с минимальной суммой отклонений по всем KPI."
+    ),
+    4: (
+        "**Цель:** сравнить итоговый маршрут с индивидуальными оптимумами (шаг 2), "
+        "оценить отклонения в % и вердикт: ≤20% — принято, ≤25% — условно, иначе — отклонено."
+    ),
+}
 
 
 def _parse_path_string(path_str: str) -> list[int]:
@@ -50,34 +65,53 @@ def _parse_path_string(path_str: str) -> list[int]:
     return [int(x.strip()) for x in s.split(sep)]
 
 
+def _step_banner(step: int) -> None:
+    st.info(STEP_GOALS[step])
+
+
 def _render_graph_highlight(
     graph,
     path: list[int] | None,
     viz_backend: str,
     edge_font_size: int,
 ) -> None:
-    """Отрисовка графа с подсветкой маршрута (общий блок для нескольких вкладок)."""
+    """Отрисовка графа (Graphviz или Pyvis) с подсветкой маршрута."""
     hp = path if path else None
-    if viz_backend == "Graphviz":
-        st.graphviz_chart(
-            visualize_graph_graphviz(graph, highlight_path=hp),
-            use_container_width=True,
-        )
-    elif viz_backend == "Plotly":
-        st.plotly_chart(
-            visualize_graph_plotly(graph, highlight_path=hp, edge_font_size=edge_font_size),
-            use_container_width=True,
-        )
-    elif viz_backend == "Matplotlib":
-        st.pyplot(
-            visualize_graph_matplotlib(graph, highlight_path=hp, edge_font_size=edge_font_size)
-        )
-    else:
+    if viz_backend == "Pyvis":
         st.components.v1.html(
             visualize_graph_pyvis(graph, highlight_path=hp, edge_font_size=edge_font_size),
             height=520,
             scrolling=True,
         )
+    else:
+        st.graphviz_chart(
+            visualize_graph_graphviz(graph, highlight_path=hp),
+            use_container_width=True,
+        )
+
+
+def _viz_controls() -> tuple[str, int]:
+    """Общие настройки визуализации (шаг 1 задаёт значения для остальных шагов)."""
+    if "viz_backend" not in st.session_state:
+        st.session_state["viz_backend"] = "Graphviz"
+    col1, col2 = st.columns(2)
+    with col1:
+        backend_ix = VIZ_BACKENDS.index(st.session_state["viz_backend"])
+        st.session_state["viz_backend"] = st.selectbox(
+            "Способ отображения",
+            VIZ_BACKENDS,
+            index=backend_ix,
+            help="Graphviz — схема слева направо; Pyvis — интерактивный граф.",
+        )
+    with col2:
+        st.session_state["edge_font_size"] = st.slider(
+            "Размер подписей на рёбрах",
+            min_value=7,
+            max_value=22,
+            value=int(st.session_state.get("edge_font_size", 11)),
+            step=1,
+        )
+    return st.session_state["viz_backend"], int(st.session_state["edge_font_size"])
 
 
 st.set_page_config(
@@ -107,76 +141,64 @@ initialize_session()
 graph = st.session_state.get("graph")
 
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/supply-chain.png", width=72)
-    st.title("Настройки")
+    st.title("SCM KPI Optimizer")
+    st.caption("Курсовая работа: транспортная SCM-сеть и KPI маршрутов")
     st.markdown(
-        "**SCM KPI Optimizer** — приложение для анализа транспортной SCM-сети (DAG) "
-        "по показателям **затраты**, **время**, **риск**."
+        "Приложение ведёт по **четырём этапам** слева направо по вкладкам. "
+        "На каждом этапе указана цель; переходите по порядку **1 → 2 → 3 → 4**."
     )
-    st.markdown(
-        "**Сценарий (по шагам):**\n"
-        "1. Модель сети — генерация и визуализация.\n"
-        "2. Оптимумы по KPI — три кратчайших пути (Дейкстра).\n"
-        "3. Якорь и допуск — один итоговый маршрут.\n"
-        "4. Оценка отклонений — сравнение с оптимумами и пороги 20%/25%."
-    )
+    st.divider()
     render_session_io()
     if st.button("Сбросить всё", use_container_width=True):
         reset_session()
         st.rerun()
     st.divider()
+    st.markdown("**Маршрутизация в сети**")
     st.session_state["source"] = 1
-    st.number_input("Откуда (узел)", min_value=1, value=1, disabled=True)
-    max_target = int(max(graph.nodes())) if graph is not None and graph.number_of_nodes() else int(st.session_state["target"])
+    st.number_input("Источник (узел)", min_value=1, value=1, disabled=True)
+    max_target = (
+        int(max(graph.nodes()))
+        if graph is not None and graph.number_of_nodes()
+        else int(st.session_state["target"])
+    )
     st.session_state["target"] = max_target
-    st.number_input("Куда (узел)", min_value=1, value=max_target, disabled=True)
-
-st.title("📊 SCM KPI Optimizer")
-st.caption(
-    "Этапная демонстрация: модель сети (источник 1 → сток — последний узел), "
-    "отдельные оптимумы по стоимости, времени и риску, затем якорный KPI с допуском 10–15% "
-    "и оценка отклонений выбранного маршрута."
-)
+    st.number_input("Сток (узел)", min_value=1, value=max_target, disabled=True)
 
 source = int(st.session_state["source"])
 target = int(st.session_state["target"])
-edge_font_size = int(st.session_state.get("edge_font_size", 11))
-highlight = st.session_state.get("highlight_path") or []
 
-m1, m2, m3, m4 = st.columns(4)
-summary = (
-    graph_summary(graph, source, target)
-    if graph is not None
-    else {"nodes": 0, "edges": 0, "is_dag": False, "has_path": False}
+st.title("Оптимизация транспортной SCM-сети")
+st.markdown(
+    "Модель — **ориентированный ациклический граф (DAG)**. На каждой дуге три показателя: "
+    "**затраты**, **время**, **риск**. Далее — поиск оптимальных и сбалансированных маршрутов "
+    "по методике курсовой работы."
 )
-m1.metric("Узлов", summary.get("nodes", 0))
-m2.metric("Рёбер", summary.get("edges", 0))
-m3.metric("Это DAG?", "Да" if summary.get("is_dag") else "Нет")
-m4.metric(f"Путь {source}→{target}", "Есть" if summary.get("has_path") else "Нет")
 
 tab_graph, tab_optima, tab_anchor, tab_kpi = st.tabs(
     [
-        "1. Модель сети",
-        "2. Оптимумы по KPI",
-        "3. Якорь и баланс",
-        "4. Оценка отклонений",
+        "① Модель сети",
+        "② Оптимумы по KPI",
+        "③ Итоговый маршрут",
+        "④ Оценка KPI",
     ]
 )
 
+# ——— Шаг 1 ———
 with tab_graph:
-    st.markdown(
-        "**Шаг 1.** Задайте транспортную сеть как DAG: сгенерируйте граф или загрузите сессию. "
-        "Проверьте таблицу дуг (веса *c*, *t*, *r* — чем меньше, тем лучше) и визуализацию."
-    )
-    st.subheader("Формирование графа")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.markdown("Нажмите кнопку, чтобы сформировать случайный DAG, или загрузите сохранённую сессию.")
-    with c2:
-        num_nodes = st.slider("Сколько узлов", 9, 24, 12)
-        edge_prob = st.slider("Вероятность ребра", 0.1, 0.8, 0.35, 0.05)
+    _step_banner(1)
 
-    if st.button("Сгенерировать DAG", type="primary", use_container_width=True):
+    st.subheader("Генерация графа")
+    gen_left, gen_right = st.columns([3, 2])
+    with gen_left:
+        st.markdown(
+            "Создайте случайную сеть или загрузите сохранённую сессию (боковая панель). "
+            "После генерации ниже появятся **сводка**, таблица дуг и схема."
+        )
+    with gen_right:
+        num_nodes = st.slider("Число узлов", 9, 24, 12)
+        edge_prob = st.slider("Вероятность доп. ребра", 0.1, 0.8, 0.35, 0.05)
+
+    if st.button("Сгенерировать граф", type="primary", use_container_width=True):
         g = generate_random_dag(
             num_nodes=num_nodes,
             edge_probability=edge_prob,
@@ -185,45 +207,37 @@ with tab_graph:
         set_graph(g)
         st.session_state["optimization_results"] = {}
         st.session_state["highlight_path"] = []
-        st.success(f"Граф сформирован: {g.number_of_nodes()} узлов, {g.number_of_edges()} рёбер.")
+        st.success("Граф сформирован.")
         st.rerun()
 
-    if graph is not None:
-        st.dataframe(pd.DataFrame(graph_to_edge_records(graph)), use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("Визуализация сети")
     if graph is None:
-        st.info("Сформируйте граф выше — изображение появится здесь же.")
+        st.warning("Граф ещё не создан. Нажмите «Сгенерировать граф» или загрузите сессию.")
     else:
-        col_v1, col_v2 = st.columns(2)
-        with col_v1:
-            backend_ix = ["Graphviz", "Plotly", "Matplotlib", "Pyvis"].index(
-                st.session_state.get("viz_backend", "Graphviz")
-            )
-            st.session_state["viz_backend"] = st.selectbox(
-                "Как рисовать граф",
-                ["Graphviz", "Plotly", "Matplotlib", "Pyvis"],
-                index=backend_ix,
-            )
-            viz_backend = st.session_state["viz_backend"]
-        with col_v2:
-            st.session_state["edge_font_size"] = st.slider(
-                "Размер шрифта весов",
-                min_value=7,
-                max_value=22,
-                value=int(st.session_state.get("edge_font_size", 11)),
-                step=1,
-                help="Размер подписей KPI на ребрах.",
-            )
-        edge_font_size = int(st.session_state.get("edge_font_size", 11))
+        summary = graph_summary(graph, source, target)
+        st.subheader("Сводка по графу")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Узлов", summary.get("nodes", 0))
+        s2.metric("Рёбер", summary.get("edges", 0))
+        s3.metric("Тип", "DAG" if summary.get("is_dag") else "Не DAG")
+        s4.metric(f"Путь {source}→{target}", "есть" if summary.get("has_path") else "нет")
 
-        path_options = ["— не подсвечивать —"] + [
+        st.subheader("Таблица дуг")
+        st.dataframe(
+            pd.DataFrame(graph_to_edge_records(graph)),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.divider()
+        st.subheader("Схема сети")
+        viz_backend, edge_font_size = _viz_controls()
+
+        path_options = ["Без подсветки"] + [
             " → ".join(map(str, p))
             for p in enumerate_all_paths(graph, source, target)[:20]
         ]
-        selected = st.selectbox("Подсветить маршрут", path_options)
-        if selected != "— не подсвечивать —":
+        selected = st.selectbox("Подсветить маршрут (опционально)", path_options)
+        if selected != "Без подсветки":
             highlight = [int(x) for x in selected.split(" → ")]
             st.session_state["highlight_path"] = highlight
         else:
@@ -232,16 +246,14 @@ with tab_graph:
 
         _render_graph_highlight(graph, highlight or None, viz_backend, edge_font_size)
 
+# ——— Шаг 2 ———
 with tab_optima:
-    st.markdown(
-        "**Шаг 2.** Для каждого критерия отдельно вычисляется кратчайший путь "
-        "(алгоритм Дейкстры, `networkx.shortest_path` с весом *cost* / *time* / *risk*). "
-        "Сравните три маршрута и при необходимости подсветьте выбранный на схеме."
-    )
-    st.subheader("Оптимальные маршруты по отдельным KPI")
+    _step_banner(2)
+
     if graph is None:
-        st.info("Сначала выполните шаг 1: сформируйте граф на вкладке «1. Модель сети».")
+        st.warning("Сначала выполните этап **① Модель сети**.")
     else:
+        st.subheader("Три оптимальных маршрута")
         optimal_df_raw = optimal_paths_summary(graph, source, target)
         st.dataframe(
             localize_optimal_df(optimal_df_raw),
@@ -251,168 +263,149 @@ with tab_optima:
 
         paths_by_kpi: dict[str, list[int]] = {}
         for _, row in optimal_df_raw.iterrows():
-            k = str(row["kpi"])
-            paths_by_kpi[k] = _parse_path_string(str(row.get("path", "")))
+            paths_by_kpi[str(row["kpi"])] = _parse_path_string(str(row.get("path", "")))
 
-        col_a, col_b = st.columns([1, 2])
+        st.subheader("Схема с подсветкой")
+        viz_backend, edge_font_size = _viz_controls()
+        col_a, col_b = st.columns([1, 3])
         with col_a:
             highlight_choice = st.radio(
-                "Подсветить на схеме маршрут, оптимальный по",
-                ["Не подсвечивать", "затраты (cost)", "время (time)", "риск (risk)"],
-                horizontal=False,
+                "Подсветить маршрут",
+                ["Без подсветки", "по затратам", "по времени", "по риску"],
             )
         with col_b:
-            viz_backend_o = st.session_state.get("viz_backend", "Graphviz")
-            edge_fs_o = int(st.session_state.get("edge_font_size", 11))
-            if highlight_choice == "Не подсвечивать":
-                _render_graph_highlight(graph, None, viz_backend_o, edge_fs_o)
+            key_map = {
+                "по затратам": "cost",
+                "по времени": "time",
+                "по риску": "risk",
+            }
+            if highlight_choice == "Без подсветки":
+                _render_graph_highlight(graph, None, viz_backend, edge_font_size)
             else:
-                key = {"затраты (cost)": "cost", "время (time)": "time", "риск (risk)": "risk"}[
-                    highlight_choice
-                ]
-                ph = paths_by_kpi.get(key, [])
-                _render_graph_highlight(graph, ph if ph else None, viz_backend_o, edge_fs_o)
+                ph = paths_by_kpi.get(key_map[highlight_choice], [])
+                _render_graph_highlight(graph, ph if ph else None, viz_backend, edge_font_size)
 
+# ——— Шаг 3 ———
 with tab_anchor:
-    st.markdown(
-        "**Шаг 3.** Выберите **якорный KPI** и допуск **10–15%**. "
-        "Сначала считается абсолютный оптимум по якорю, затем задаётся ослаблённый порог. "
-        "Среди всех маршрутов, укладывающихся в этот порог, выбирается **один итоговый маршрут** "
-        "с минимальной суммой отклонений по затратам, времени и риску (относительно оптимумов шага 2)."
-    )
-    st.subheader("Маршрут при ослабленном якорном KPI")
-    if graph is None:
-        st.info("Сначала выполните шаг 1: сформируйте граф.")
-    else:
-        anchor_ix = KPI_OPTIONS.index(st.session_state.get("selected_anchor_kpi", "cost"))
-        st.session_state["selected_anchor_kpi"] = st.selectbox(
-            "Якорный KPI (главный критерий)",
-            KPI_OPTIONS,
-            index=anchor_ix,
-            format_func=lambda k: KPI_LABELS[k],
-        )
-        st.session_state["relaxation_percent"] = st.slider(
-            "Допуск по якорю, %",
-            10.0,
-            15.0,
-            float(st.session_state.get("relaxation_percent", 12.0)),
-            0.5,
-            help="Допустимое отклонение от оптимального значения якорного KPI при подборе сбалансированного маршрута.",
-        )
+    _step_banner(3)
 
-        if st.button("Выполнить оптимизацию", type="primary"):
-            anchor = st.session_state["selected_anchor_kpi"]
-            relax = st.session_state["relaxation_percent"]
+    if graph is None:
+        st.warning("Сначала выполните этап **① Модель сети**.")
+    else:
+        st.subheader("Параметры расчёта")
+        p1, p2 = st.columns(2)
+        with p1:
+            anchor_ix = KPI_OPTIONS.index(st.session_state.get("selected_anchor_kpi", "cost"))
+            st.session_state["selected_anchor_kpi"] = st.selectbox(
+                "Якорный KPI",
+                KPI_OPTIONS,
+                index=anchor_ix,
+                format_func=lambda k: KPI_LABELS[k],
+                help="Главный критерий, для которого задаётся допуск от абсолютного оптимума.",
+            )
+        with p2:
+            st.session_state["relaxation_percent"] = st.slider(
+                "Допуск по якорю, %",
+                10.0,
+                15.0,
+                float(st.session_state.get("relaxation_percent", 12.0)),
+                0.5,
+            )
+
+        if st.button("Рассчитать итоговый маршрут", type="primary", use_container_width=True):
             try:
-                balanced = find_balanced_path(graph, anchor, relax, source, target)
+                balanced = find_balanced_path(
+                    graph,
+                    st.session_state["selected_anchor_kpi"],
+                    st.session_state["relaxation_percent"],
+                    source,
+                    target,
+                )
                 paths = enumerate_all_paths(graph, source, target)
-                ranked = rank_paths(graph, paths)
-                optimal_df = optimal_paths_summary(graph, source, target)
                 st.session_state["optimization_results"] = {
                     "balanced": balanced,
-                    "ranked_paths": ranked,
-                    "optimal_paths": optimal_df,
+                    "ranked_paths": rank_paths(graph, paths, source, target),
+                    "optimal_paths": optimal_paths_summary(graph, source, target),
                 }
                 st.session_state["highlight_path"] = balanced.get("balanced_path", [])
-                st.success("Оптимизация выполнена, маршруты рассчитаны.")
+                st.success("Расчёт выполнен. Перейдите на этап **④ Оценка KPI**.")
             except Exception as e:
-                st.error(f"Не удалось выполнить оптимизацию: {e}")
+                st.error(f"Ошибка расчёта: {e}")
 
         res = st.session_state.get("optimization_results", {})
         if res:
             balanced = res.get("balanced", {})
             route = balanced.get("balanced_path", [])
-            st.markdown("**Итоговый маршрут**")
+
+            st.subheader("Результат")
+            st.markdown("**Маршрут:**")
             st.code(" → ".join(map(str, route)) if route else "—")
 
-            anchor_ru = KPI_LABELS.get(str(balanced.get("anchor_kpi", "")), balanced.get("anchor_kpi", ""))
-            with st.expander("Как получен маршрут (якорь и допуск)"):
-                st.markdown(
-                    f"- Якорный KPI: **{anchor_ru}**\n"
-                    f"- Абсолютный оптимум по якорю: **{balanced.get('anchor_optimal', 0):.2f}**\n"
-                    f"- Допуск: **{balanced.get('relaxation_percent', 0):.1f}%** "
-                    f"(порог: **{balanced.get('anchor_limit', 0):.2f}**)\n"
-                    f"- Итоговый маршрут — лучший среди путей с якорём ≤ порога "
-                    f"по минимальной сумме отклонений остальных KPI.\n"
-                    f"- Абсолютный оптимум только по якорю см. на **шаге 2** "
-                    f"(отдельная строка таблицы для выбранного KPI)."
-                )
-
             bm = balanced.get("balanced_metrics", {})
-            o1, o2, o3, o4 = st.columns(4)
-            o1.metric("Затраты", f"{bm.get('total_cost', 0):.2f}")
-            o2.metric("Время", f"{bm.get('total_time', 0):.2f}")
-            o3.metric("Риск", f"{bm.get('total_risk', 0):.2f}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Затраты", f"{bm.get('total_cost', 0):.2f}")
+            m2.metric("Время", f"{bm.get('total_time', 0):.2f}")
+            m3.metric("Риск", f"{bm.get('total_risk', 0):.2f}")
             status_ru = {
                 "accepted": "принято",
                 "conditionally_accepted": "условно",
                 "rejected": "отклонено",
             }.get(str(balanced.get("solution_status", "")), "—")
-            o4.metric("Статус решения", status_ru)
-            st.metric(
-                "Суммарное отклонение KPI, %",
-                f"{bm.get('total_deviation', 0):.2f}",
-                help="Сумма отклонений затрат, времени и риска от индивидуальных оптимумов.",
-            )
+            m4.metric("Предварительный статус", status_ru)
 
-            st.markdown("**Визуализация итогового маршрута**")
-            viz_backend = st.session_state.get("viz_backend", "Graphviz")
+            anchor_ru = KPI_LABELS.get(str(balanced.get("anchor_kpi", "")), "")
+            with st.expander("Подробности расчёта"):
+                st.markdown(
+                    f"- Якорь: **{anchor_ru}** · оптимум по якорю: **{balanced.get('anchor_optimal', 0):.2f}** · "
+                    f"допуск **{balanced.get('relaxation_percent', 0):.1f}%** · "
+                    f"порог **{balanced.get('anchor_limit', 0):.2f}**\n"
+                    f"- Суммарное отклонение от оптимумов (шаг 2): **{bm.get('total_deviation', 0):.2f}%**"
+                )
+
+            st.subheader("Схема итогового маршрута")
+            viz_backend, edge_font_size = _viz_controls()
             _render_graph_highlight(graph, route or None, viz_backend, edge_font_size)
 
-            st.caption("Три независимых оптимума по одному KPI — на шаге 2.")
-            st.markdown("**Все маршруты (рейтинг)**")
-            st.dataframe(
-                localize_paths_df(res.get("ranked_paths")),
-                use_container_width=True,
-                hide_index=True,
-            )
+            with st.expander("Дополнительно: все маршруты (рейтинг)"):
+                st.dataframe(
+                    localize_paths_df(res.get("ranked_paths")),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        elif graph is not None:
+            st.info("Задайте якорный KPI и допуск, затем нажмите «Рассчитать итоговый маршрут».")
 
+# ——— Шаг 4 ———
 with tab_kpi:
-    st.markdown(
-        "**Шаг 4.** Сравните итоговые суммы **маршрута с шага 3** с индивидуальными оптимумами, "
-        "оцените отклонения в процентах и правила приёмки: до **20%** — допустимо, до **25%** — условно, "
-        "иначе смените якорный KPI или допуск и повторите шаг 3."
-    )
-    st.subheader("Разбор KPI")
-    if graph is None or not st.session_state.get("optimization_results"):
-        st.info("Сначала выполните шаг 3: расчёт на вкладке «3. Якорь и баланс».")
+    _step_banner(4)
+
+    if graph is None:
+        st.warning("Сначала выполните этап **① Модель сети**.")
+    elif not st.session_state.get("optimization_results"):
+        st.warning("Сначала выполните этап **③ Итоговый маршрут**.")
     else:
         balanced = st.session_state["optimization_results"]["balanced"]
         current_path = balanced.get("balanced_path", [])
         current_m = calculate_path_metrics(graph, current_path)
 
-        st.markdown("**С чем сравниваем**")
-        st.markdown(
-            "- **Текущий маршрут** — итоговый путь с шага 3 (ослабленный якорь + минимум суммарного отклонения).\n"
-            "- **Оптимум по каждому KPI** — отдельно: минимально возможная сумма по этому показателю среди всех "
-            "маршрутов из источника в сток (кратчайший путь по весу `cost`, `time` или `risk`, алгоритм Дейкстры). "
-            "Три оптимума в общем случае относятся к **разным** маршрутам; в таблице ниже для каждой строки KPI "
-            "в столбце «оптимум» указано именно **индивидуальное** лучшее значение по этому показателю.\n"
-            "- **Отклонение %** — отношение прироста к оптимуму в процентах: "
-            "(текущий − оптимум) / оптимум × 100. "
-            "Чем меньше значение показателя, тем лучше; положительное отклонение означает ухудшение относительно "
-            "идеала по данному KPI."
-        )
+        st.subheader("Итоговый маршрут")
+        st.code(" → ".join(map(str, current_path)) if current_path else "—")
 
         optimal_m = balanced.get("per_kpi_optima")
         try:
             if not optimal_m:
-                p_cost = shortest_path_by_cost(graph, source, target)
-                m_cost = calculate_path_metrics(graph, p_cost)
-                p_time = shortest_path_by_time(graph, source, target)
-                m_time = calculate_path_metrics(graph, p_time)
-                p_risk = shortest_path_by_risk(graph, source, target)
-                m_risk = calculate_path_metrics(graph, p_risk)
+                m_cost = calculate_path_metrics(graph, shortest_path_by_cost(graph, source, target))
+                m_time = calculate_path_metrics(graph, shortest_path_by_time(graph, source, target))
+                m_risk = calculate_path_metrics(graph, shortest_path_by_risk(graph, source, target))
                 optimal_m = {
                     "total_cost": m_cost["total_cost"],
                     "total_time": m_time["total_time"],
                     "total_risk": m_risk["total_risk"],
                 }
-            else:
-                p_cost = shortest_path_by_cost(graph, source, target)
-                p_time = shortest_path_by_time(graph, source, target)
-                p_risk = shortest_path_by_risk(graph, source, target)
-            with st.expander("Маршруты, на которых достигаются индивидуальные оптимумы"):
+            p_cost = shortest_path_by_cost(graph, source, target)
+            p_time = shortest_path_by_time(graph, source, target)
+            p_risk = shortest_path_by_risk(graph, source, target)
+            with st.expander("Эталонные маршруты (шаг 2)"):
                 st.markdown(
                     f"| KPI | Маршрут |\n|-----|--------|\n"
                     f"| Затраты | `{' → '.join(map(str, p_cost))}` |\n"
@@ -431,31 +424,42 @@ with tab_kpi:
             kpi_summary, {}, balance_df, balanced_result=balanced
         )
 
-        v1, v2, v3 = st.columns(3)
-        v1.metric("Принято", kpi_summary["accepted"])
-        v2.metric("Условно принято", kpi_summary["conditionally_accepted"])
-        v3.metric("Отклонено", kpi_summary["rejected"])
+        st.subheader("Вердикт")
+        overall_ru = {
+            "accepted": "Принято",
+            "conditionally_accepted": "Условно принято",
+            "rejected": "Отклонено",
+        }.get(str(kpi_summary["overall"]), "—")
 
-        if kpi_summary["overall"] != "accepted":
-            st.warning(kpi_summary["explanation"])
+        if kpi_summary["overall"] == "accepted":
+            st.success(f"**{overall_ru}** — все KPI в пределах 20% от индивидуальных оптимумов.")
+        elif kpi_summary["overall"] == "conditionally_accepted":
+            st.warning(f"**{overall_ru}** — есть KPI в диапазоне 20–25%.")
         else:
-            st.success(kpi_summary["explanation"])
+            st.error(f"**{overall_ru}** — измените якорь или допуск на этапе ③ и пересчитайте.")
 
-        st.markdown("**Таблица сравнения** — по каждой строке: текущие суммы сбалансированного маршрута, "
-                    "индивидуальный оптимум по этому KPI, отклонение в % и статус (20% / 25%).")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("KPI ≤ 20%", kpi_summary["accepted"])
+        c2.metric("KPI 20–25%", kpi_summary["conditionally_accepted"])
+        c3.metric("KPI > 25%", kpi_summary["rejected"])
+
+        st.subheader("Сравнение с оптимумами")
+        st.caption(
+            "По каждому KPI: сумма по итоговому маршруту, индивидуальный оптимум (шаг 2), "
+            "отклонение %, статус строки."
+        )
         st.dataframe(localize_balance_df(balance_df), use_container_width=True, hide_index=True)
 
         used_anchor = balanced.get("requested_anchor_kpi") or balanced.get("anchor_kpi", "cost")
         used_relax = balanced.get("requested_relaxation_percent", balanced.get("relaxation_percent"))
-        anchor_ru = KPI_LABELS.get(str(used_anchor), str(used_anchor))
-        st.markdown(
-            f"**Параметры расчёта (шаг 3):** якорный KPI — **{anchor_ru}**, "
-            f"допуск **{float(used_relax):.1f}%**. "
-            f"Отклонения в таблице выше относятся **только к итоговому маршруту**, "
-            f"а не к среднему по всем путям сети."
+        st.caption(
+            f"Параметры этапа ③: якорь — **{KPI_LABELS.get(str(used_anchor), used_anchor)}**, "
+            f"допуск — **{float(used_relax):.1f}%**."
         )
-        for rec in recommendations:
-            st.markdown(f"- {rec}")
+
+        with st.expander("Пояснения"):
+            for rec in recommendations:
+                st.markdown(f"- {rec}")
 
         st.session_state["reports"] = {
             "kpi_balance_df": localize_balance_df(balance_df),

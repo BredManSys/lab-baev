@@ -29,6 +29,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "target": 9,
     "graph_density": 1.2,
     "edge_font_size": 11,
+    "viz_backend": "Graphviz",
 }
 
 
@@ -133,6 +134,7 @@ def save_session_to_json() -> str:
         "target": st.session_state.get("target", 9),
         "graph_density": st.session_state.get("graph_density", 1.2),
         "edge_font_size": st.session_state.get("edge_font_size", 11),
+        "viz_backend": st.session_state.get("viz_backend", "Graphviz"),
         "summary": graph_summary(graph) if graph is not None else {},
     }
     return json.dumps(_to_json_safe(payload), indent=2, ensure_ascii=False)
@@ -166,6 +168,8 @@ def load_session_from_json(json_str: str) -> tuple[bool, str]:
         st.session_state["target"] = loaded_target
     st.session_state["graph_density"] = float(data.get("graph_density", 1.2))
     st.session_state["edge_font_size"] = int(data.get("edge_font_size", 11))
+    vb = data.get("viz_backend", "Graphviz")
+    st.session_state["viz_backend"] = vb if vb in ("Graphviz", "Pyvis") else "Graphviz"
     return True, "Сессия успешно загружена."
 
 
