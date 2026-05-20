@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from itertools import islice
 from typing import Any
 
 import networkx as nx
@@ -33,7 +34,7 @@ def _random_weights(
     - balanced: no strong bias
     """
     spread = max_weight - min_weight
-    distance_bias = spread * 0.45 * span_ratio
+    distance_bias = spread * 0.55 * span_ratio
 
     profile = rng.choices(
         population=["economy", "express", "safe", "aggressive", "balanced"],
@@ -57,9 +58,14 @@ def _random_weights(
     def to_range(v: float) -> float:
         return round(max(min_weight, min(max_weight, v)), 2)
 
-    cost = min_weight + base_cost * spread + distance_bias + noise()
-    time = min_weight + base_time * spread + distance_bias + noise()
-    risk = min_weight + base_risk * spread + distance_bias * 0.7 + noise()
+    # Long jumps are usually faster but more expensive and riskier.
+    span_cost = distance_bias
+    span_time = -spread * 0.25 * span_ratio
+    span_risk = distance_bias * 0.85
+
+    cost = min_weight + base_cost * spread + span_cost + noise()
+    time = min_weight + base_time * spread + span_time + noise()
+    risk = min_weight + base_risk * spread + span_risk + noise()
     return {"cost": to_range(cost), "time": to_range(time), "risk": to_range(risk)}
 
 
@@ -114,6 +120,57 @@ def _ensure_minimum_route_diversity(
                 return
 
 
+def _apply_metric_factor(
+    graph: nx.DiGraph,
+    path: list[int],
+    metric: str,
+    factor: float,
+    min_weight: float,
+    max_weight: float,
+) -> None:
+    for i in range(len(path) - 1):
+        u, v = path[i], path[i + 1]
+        val = float(graph[u][v].get(metric, min_weight))
+        graph[u][v][metric] = round(max(min_weight, min(max_weight, val * factor)), 2)
+
+
+def _promote_metric_diversity(
+    graph: nx.DiGraph,
+    num_nodes: int,
+    min_weight: float,
+    max_weight: float,
+) -> None:
+    """
+    Reduce chance that one path is simultaneously best for all KPIs.
+    """
+    source, target = 1, num_nodes
+    metrics = ("cost", "time", "risk")
+    best_paths: dict[str, list[int]] = {}
+    second_paths: dict[str, list[int]] = {}
+
+    for metric in metrics:
+        try:
+            gen = nx.shortest_simple_paths(graph, source=source, target=target, weight=metric)
+            paths = list(islice(gen, 2))
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return
+        if not paths:
+            return
+        best_paths[metric] = paths[0]
+        second_paths[metric] = paths[1] if len(paths) > 1 else paths[0]
+
+    unique_best = {tuple(p) for p in best_paths.values()}
+    if len(unique_best) > 1:
+        return
+
+    shared = best_paths["cost"]
+    for metric in metrics:
+        alt = second_paths[metric]
+        if alt != shared:
+            _apply_metric_factor(graph, shared, metric, 1.18, min_weight, max_weight)
+            _apply_metric_factor(graph, alt, metric, 0.78, min_weight, max_weight)
+
+
 def generate_random_dag(
     num_nodes: int = 12,
     edge_probability: float = 0.35,
@@ -143,7 +200,7 @@ def generate_random_dag(
         _add_edge_with_profile(graph, u, u + 1, rng, min_weight, max_weight, num_nodes)
 
     # Alternative routes: forward skip edges (i < j) to preserve acyclicity
-    max_skip = max(3, min(7, num_nodes // 2))
+    max_skip = max(3, min(5, num_nodes // 3 + 2))
     for i in range(1, num_nodes):
         for jump in range(2, max_skip + 1):
             j = i + jump
@@ -156,14 +213,18 @@ def generate_random_dag(
                 _add_edge_with_profile(graph, i, j, rng, min_weight, max_weight, num_nodes)
 
     # A few corridor edges from early to mid/late levels add meaningful strategic choices.
-    corridor_count = max(1, num_nodes // 6)
+    corridor_count = max(1, num_nodes // 7)
     for _ in range(corridor_count):
         u = rng.randint(1, max(2, num_nodes // 3))
-        v = rng.randint(min(num_nodes, u + 3), num_nodes)
+        max_v = min(num_nodes - 1, u + max(4, num_nodes // 2))
+        if max_v <= u + 2:
+            continue
+        v = rng.randint(u + 3, max_v)
         if u < v:
             _add_edge_with_profile(graph, u, v, rng, min_weight, max_weight, num_nodes)
 
     _ensure_minimum_route_diversity(graph, rng, min_weight, max_weight, num_nodes)
+    _promote_metric_diversity(graph, num_nodes, min_weight, max_weight)
 
     assert nx.is_directed_acyclic_graph(graph)
     assert nx.has_path(graph, 1, num_nodes)
