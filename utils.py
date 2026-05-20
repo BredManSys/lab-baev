@@ -10,6 +10,7 @@ import pandas as pd
 KPI_KEYS = ("cost", "time", "risk")
 
 KPI_RU = {"cost": "затраты", "time": "время", "risk": "риск"}
+KPI_LABELS = KPI_RU  # подписи KPI в UI (app.py)
 
 STATUS_RU = {
     "accepted": "принято",
