@@ -106,10 +106,10 @@ m2.metric("Рёбер", summary.get("edges", 0))
 m3.metric("Это DAG?", "Да" if summary.get("is_dag") else "Нет")
 m4.metric(f"Путь {source}→{target}", "Есть" if summary.get("has_path") else "Нет")
 
-tab_setup, tab_viz, tab_opt, tab_kpi = st.tabs(["Граф", "Визуализация", "Маршруты", "KPI"])
+tab_graph, tab_opt, tab_kpi = st.tabs(["Граф и визуализация", "Маршруты", "KPI"])
 
-with tab_setup:
-    st.subheader("Настройка графа")
+with tab_graph:
+    st.subheader("Формирование графа")
     c1, c2 = st.columns([2, 1])
     with c1:
         st.markdown("Нажмите кнопку, чтобы сформировать случайный DAG, или загрузите сохранённую сессию.")
@@ -132,10 +132,10 @@ with tab_setup:
     if graph is not None:
         st.dataframe(pd.DataFrame(graph_to_edge_records(graph)), use_container_width=True, hide_index=True)
 
-with tab_viz:
+    st.divider()
     st.subheader("Визуализация сети")
     if graph is None:
-        st.info("Сначала сформируйте граф на вкладке «Граф».")
+        st.info("Сформируйте граф выше — изображение появится здесь же.")
     else:
         col_v1, col_v2 = st.columns(2)
         with col_v1:
