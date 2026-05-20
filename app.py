@@ -90,28 +90,38 @@ def _render_graph_highlight(
         )
 
 
-def _viz_controls() -> tuple[str, int]:
-    """Общие настройки визуализации (шаг 1 задаёт значения для остальных шагов)."""
+def _get_viz_settings() -> tuple[str, int]:
+    """Текущие настройки визуализации из session_state."""
     if "viz_backend" not in st.session_state:
         st.session_state["viz_backend"] = "Graphviz"
+    if "edge_font_size" not in st.session_state:
+        st.session_state["edge_font_size"] = 11
+    return st.session_state["viz_backend"], int(st.session_state["edge_font_size"])
+
+
+def _viz_controls_editor() -> tuple[str, int]:
+    """Виджеты визуализации — только на этапе ① (иначе дублируются id виджетов)."""
+    if "viz_backend" not in st.session_state:
+        st.session_state["viz_backend"] = "Graphviz"
+    if "edge_font_size" not in st.session_state:
+        st.session_state["edge_font_size"] = 11
     col1, col2 = st.columns(2)
     with col1:
-        backend_ix = VIZ_BACKENDS.index(st.session_state["viz_backend"])
-        st.session_state["viz_backend"] = st.selectbox(
+        st.selectbox(
             "Способ отображения",
             VIZ_BACKENDS,
-            index=backend_ix,
+            key="viz_backend",
             help="Graphviz — схема слева направо; Pyvis — интерактивный граф.",
         )
     with col2:
-        st.session_state["edge_font_size"] = st.slider(
+        st.slider(
             "Размер подписей на рёбрах",
             min_value=7,
             max_value=22,
-            value=int(st.session_state.get("edge_font_size", 11)),
             step=1,
+            key="edge_font_size",
         )
-    return st.session_state["viz_backend"], int(st.session_state["edge_font_size"])
+    return _get_viz_settings()
 
 
 st.set_page_config(
@@ -195,8 +205,8 @@ with tab_graph:
             "После генерации ниже появятся **сводка**, таблица дуг и схема."
         )
     with gen_right:
-        num_nodes = st.slider("Число узлов", 9, 24, 12)
-        edge_prob = st.slider("Вероятность доп. ребра", 0.1, 0.8, 0.35, 0.05)
+        num_nodes = st.slider("Число узлов", 9, 24, 12, key="gen_num_nodes")
+        edge_prob = st.slider("Вероятность доп. ребра", 0.1, 0.8, 0.35, 0.05, key="gen_edge_prob")
 
     if st.button("Сгенерировать граф", type="primary", use_container_width=True):
         g = generate_random_dag(
@@ -230,13 +240,17 @@ with tab_graph:
 
         st.divider()
         st.subheader("Схема сети")
-        viz_backend, edge_font_size = _viz_controls()
+        viz_backend, edge_font_size = _viz_controls_editor()
 
         path_options = ["Без подсветки"] + [
             " → ".join(map(str, p))
             for p in enumerate_all_paths(graph, source, target)[:20]
         ]
-        selected = st.selectbox("Подсветить маршрут (опционально)", path_options)
+        selected = st.selectbox(
+            "Подсветить маршрут (опционально)",
+            path_options,
+            key="path_highlight_step1",
+        )
         if selected != "Без подсветки":
             highlight = [int(x) for x in selected.split(" → ")]
             st.session_state["highlight_path"] = highlight
@@ -266,12 +280,17 @@ with tab_optima:
             paths_by_kpi[str(row["kpi"])] = _parse_path_string(str(row.get("path", "")))
 
         st.subheader("Схема с подсветкой")
-        viz_backend, edge_font_size = _viz_controls()
+        st.caption(
+            f"Отображение: **{st.session_state.get('viz_backend', 'Graphviz')}** "
+            f"(настройки — на этапе ①)."
+        )
+        viz_backend, edge_font_size = _get_viz_settings()
         col_a, col_b = st.columns([1, 3])
         with col_a:
             highlight_choice = st.radio(
                 "Подсветить маршрут",
                 ["Без подсветки", "по затратам", "по времени", "по риску"],
+                key="path_highlight_step2",
             )
         with col_b:
             key_map = {
@@ -301,6 +320,7 @@ with tab_anchor:
                 KPI_OPTIONS,
                 index=anchor_ix,
                 format_func=lambda k: KPI_LABELS[k],
+                key="anchor_kpi_select",
                 help="Главный критерий, для которого задаётся допуск от абсолютного оптимума.",
             )
         with p2:
@@ -310,6 +330,7 @@ with tab_anchor:
                 15.0,
                 float(st.session_state.get("relaxation_percent", 12.0)),
                 0.5,
+                key="relaxation_pct_slider",
             )
 
         if st.button("Рассчитать итоговый маршрут", type="primary", use_container_width=True):
@@ -363,7 +384,11 @@ with tab_anchor:
                 )
 
             st.subheader("Схема итогового маршрута")
-            viz_backend, edge_font_size = _viz_controls()
+            st.caption(
+                f"Отображение: **{st.session_state.get('viz_backend', 'Graphviz')}** "
+                f"(настройки — на этапе ①)."
+            )
+            viz_backend, edge_font_size = _get_viz_settings()
             _render_graph_highlight(graph, route or None, viz_backend, edge_font_size)
 
             with st.expander("Дополнительно: все маршруты (рейтинг)"):
