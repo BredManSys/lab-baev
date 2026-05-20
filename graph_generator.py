@@ -20,12 +20,98 @@ def _random_weights(
     rng: random.Random,
     min_weight: float,
     max_weight: float,
+    span_ratio: float = 0.0,
 ) -> dict[str, float]:
-    return {
-        "cost": round(rng.uniform(min_weight, max_weight), 2),
-        "time": round(rng.uniform(min_weight, max_weight), 2),
-        "risk": round(rng.uniform(min_weight, max_weight), 2),
-    }
+    """
+    Generate KPI weights with route profiles and trade-offs.
+
+    Profiles make routes more realistic:
+    - economy: cheaper, slower, slightly riskier
+    - express: faster, more expensive
+    - safe: lower risk, moderate cost/time
+    - aggressive: fast and cheap, but risky
+    - balanced: no strong bias
+    """
+    spread = max_weight - min_weight
+    distance_bias = spread * 0.45 * span_ratio
+
+    profile = rng.choices(
+        population=["economy", "express", "safe", "aggressive", "balanced"],
+        weights=[0.24, 0.22, 0.20, 0.14, 0.20],
+        k=1,
+    )[0]
+
+    if profile == "economy":
+        base_cost, base_time, base_risk = 0.22, 0.72, 0.58
+    elif profile == "express":
+        base_cost, base_time, base_risk = 0.78, 0.25, 0.52
+    elif profile == "safe":
+        base_cost, base_time, base_risk = 0.62, 0.58, 0.22
+    elif profile == "aggressive":
+        base_cost, base_time, base_risk = 0.34, 0.28, 0.84
+    else:
+        base_cost, base_time, base_risk = 0.50, 0.50, 0.50
+
+    noise = lambda: rng.uniform(-0.10, 0.10) * spread
+
+    def to_range(v: float) -> float:
+        return round(max(min_weight, min(max_weight, v)), 2)
+
+    cost = min_weight + base_cost * spread + distance_bias + noise()
+    time = min_weight + base_time * spread + distance_bias + noise()
+    risk = min_weight + base_risk * spread + distance_bias * 0.7 + noise()
+    return {"cost": to_range(cost), "time": to_range(time), "risk": to_range(risk)}
+
+
+def _add_edge_with_profile(
+    graph: nx.DiGraph,
+    u: int,
+    v: int,
+    rng: random.Random,
+    min_weight: float,
+    max_weight: float,
+    num_nodes: int,
+) -> None:
+    if graph.has_edge(u, v):
+        return
+    span_ratio = (v - u) / max(1, (num_nodes - 1))
+    graph.add_edge(u, v, **_random_weights(rng, min_weight, max_weight, span_ratio=span_ratio))
+
+
+def _ensure_minimum_route_diversity(
+    graph: nx.DiGraph,
+    rng: random.Random,
+    min_weight: float,
+    max_weight: float,
+    num_nodes: int,
+) -> None:
+    """Ensure at least two distinct source-target routes when possible."""
+    source, target = 1, num_nodes
+    def _has_two_or_more_paths() -> bool:
+        try:
+            count = 0
+            for _ in nx.all_simple_paths(graph, source=source, target=target, cutoff=num_nodes):
+                count += 1
+                if count >= 2:
+                    return True
+            return False
+        except nx.NetworkXNoPath:
+            return False
+
+    if _has_two_or_more_paths():
+        return
+
+    bridge_candidates = [
+        (1, min(num_nodes, 3)),
+        (2, min(num_nodes, 5)),
+        (max(1, num_nodes - 4), num_nodes),
+        (max(1, num_nodes - 6), max(1, num_nodes - 2)),
+    ]
+    for u, v in bridge_candidates:
+        if u < v and u in graph and v in graph and not graph.has_edge(u, v):
+            _add_edge_with_profile(graph, u, v, rng, min_weight, max_weight, num_nodes)
+            if _has_two_or_more_paths():
+                return
 
 
 def generate_random_dag(
@@ -41,8 +127,9 @@ def generate_random_dag(
     Guarantees:
     - At least 9 nodes (raises ValueError otherwise)
     - Backbone path 1 -> 2 -> ... -> num_nodes
+    - Additional branch/express edges to create diverse route options
     - Additional edges only from lower to higher node id (DAG)
-    - Optional alternative routes via extra edges
+    - KPI values with realistic trade-off profiles on edges
     """
     if num_nodes < 9:
         raise ValueError("num_nodes must be at least 9")
@@ -53,13 +140,30 @@ def generate_random_dag(
 
     # Guaranteed backbone path 1 -> ... -> num_nodes
     for u in range(1, num_nodes):
-        graph.add_edge(u, u + 1, **_random_weights(rng, min_weight, max_weight))
+        _add_edge_with_profile(graph, u, u + 1, rng, min_weight, max_weight, num_nodes)
 
-    # Alternative routes: only forward edges (i < j) to preserve acyclicity
-    for i in range(1, num_nodes + 1):
-        for j in range(i + 2, num_nodes + 1):
-            if rng.random() < edge_probability and not graph.has_edge(i, j):
-                graph.add_edge(i, j, **_random_weights(rng, min_weight, max_weight))
+    # Alternative routes: forward skip edges (i < j) to preserve acyclicity
+    max_skip = max(3, min(7, num_nodes // 2))
+    for i in range(1, num_nodes):
+        for jump in range(2, max_skip + 1):
+            j = i + jump
+            if j > num_nodes:
+                break
+            # Slight bias toward shorter skips for richer but interpretable route sets.
+            jump_penalty = 0.85 ** (jump - 2)
+            p = min(0.95, edge_probability * jump_penalty)
+            if rng.random() < p:
+                _add_edge_with_profile(graph, i, j, rng, min_weight, max_weight, num_nodes)
+
+    # A few corridor edges from early to mid/late levels add meaningful strategic choices.
+    corridor_count = max(1, num_nodes // 6)
+    for _ in range(corridor_count):
+        u = rng.randint(1, max(2, num_nodes // 3))
+        v = rng.randint(min(num_nodes, u + 3), num_nodes)
+        if u < v:
+            _add_edge_with_profile(graph, u, v, rng, min_weight, max_weight, num_nodes)
+
+    _ensure_minimum_route_diversity(graph, rng, min_weight, max_weight, num_nodes)
 
     assert nx.is_directed_acyclic_graph(graph)
     assert nx.has_path(graph, 1, num_nodes)
