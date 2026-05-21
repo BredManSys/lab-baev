@@ -123,12 +123,16 @@ def _render_flow_highlight(
     flow_dict: dict | None,
     viz_backend: str,
     edge_font_size: int,
+    source: int,
+    sink: int,
 ) -> None:
     """Отрисовка сети потоков (Graphviz или Pyvis) с подсветкой потока на рёбрах."""
     if viz_backend == "Pyvis":
         st.components.v1.html(
             visualize_flow_pyvis(
                 flow_graph,
+                source=source,
+                sink=sink,
                 flow_dict=flow_dict,
                 edge_font_size=edge_font_size,
             ),
@@ -137,7 +141,9 @@ def _render_flow_highlight(
         )
     else:
         st.graphviz_chart(
-            visualize_flow_graphviz(flow_graph, flow_dict=flow_dict),
+            visualize_flow_graphviz(
+                flow_graph, source=source, sink=sink, flow_dict=flow_dict
+            ),
             use_container_width=True,
         )
 
@@ -710,7 +716,7 @@ with tab_flow:
                 key="flow_edge_font_size",
                 value=int(st.session_state.get("edge_font_size", 11)),
             )
-        _render_flow_highlight(flow_graph, None, flow_viz, flow_font)
+        _render_flow_highlight(flow_graph, None, flow_viz, flow_font, flow_source, flow_sink)
 
         # ——— ② Maximum Flow ———
         st.divider()
@@ -779,6 +785,8 @@ with tab_flow:
                 max_res.get("flow_dict"),
                 st.session_state.get("flow_viz_backend", "Graphviz"),
                 int(st.session_state.get("flow_edge_font_size", 11)),
+                flow_source,
+                flow_sink,
             )
         else:
             st.info("Сначала постройте модель (①), затем запустите расчёт max flow.")
@@ -842,6 +850,8 @@ with tab_flow:
                 mcf_res.get("flow_dict"),
                 st.session_state.get("flow_viz_backend", "Graphviz"),
                 int(st.session_state.get("flow_edge_font_size", 11)),
+                flow_source,
+                flow_sink,
             )
         else:
             st.info("Сначала постройте модель (①), затем запустите min cost flow.")

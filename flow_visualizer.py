@@ -7,8 +7,6 @@ from typing import Any
 import networkx as nx
 from pyvis.network import Network
 
-from flow_generator import DEFAULT_SINK, DEFAULT_SOURCE
-
 PATH_EDGE_COLOR = "#e74c3c"
 DEFAULT_EDGE_COLOR = "#95a5a6"
 NODE_COLOR = "#3498db"
@@ -26,6 +24,31 @@ def _flow_on_edge(
     return float(flow_dict.get(u, {}).get(v, 0.0))
 
 
+def resolve_flow_terminals(
+    graph: nx.DiGraph,
+    source: int | None = None,
+    sink: int | None = None,
+) -> tuple[int, int]:
+    """Фактические s и t: из аргументов, иначе demand, иначе 0 и max(узел)."""
+    if graph.number_of_nodes() == 0:
+        return 0, 0
+    if source is None:
+        suppliers = [
+            n
+            for n in graph.nodes()
+            if float(graph.nodes[n].get("demand", 0)) < -1e-9
+        ]
+        source = suppliers[0] if suppliers else 0
+    if sink is None:
+        consumers = [
+            n
+            for n in graph.nodes()
+            if float(graph.nodes[n].get("demand", 0)) > 1e-9
+        ]
+        sink = consumers[0] if consumers else max(graph.nodes())
+    return int(source), int(sink)
+
+
 def _edge_label_flow(
     capacity: float,
     cost: float,
@@ -39,12 +62,13 @@ def _edge_label_flow(
 
 def visualize_flow_graphviz(
     graph: nx.DiGraph,
-    source: int = DEFAULT_SOURCE,
-    sink: int = DEFAULT_SINK,
+    source: int | None = None,
+    sink: int | None = None,
     flow_dict: dict[int, dict[int, float]] | None = None,
     highlight_edges: set[tuple[int, int]] | None = None,
 ) -> str:
     """DOT-схема сети потоков с подсветкой потока."""
+    source, sink = resolve_flow_terminals(graph, source, sink)
     if highlight_edges is None and flow_dict:
         highlight_edges = {
             (u, v)
@@ -89,13 +113,14 @@ def visualize_flow_graphviz(
 
 def visualize_flow_pyvis(
     graph: nx.DiGraph,
-    source: int = DEFAULT_SOURCE,
-    sink: int = DEFAULT_SINK,
+    source: int | None = None,
+    sink: int | None = None,
     flow_dict: dict[int, dict[int, float]] | None = None,
     edge_font_size: int = 11,
     height: str = "500px",
 ) -> str:
     """HTML Pyvis для встраивания в Streamlit."""
+    source, sink = resolve_flow_terminals(graph, source, sink)
     net = Network(height=height, width="100%", directed=True, bgcolor="#1e1e1e", font_color="white")
     show_flow = flow_dict is not None
 
