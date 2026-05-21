@@ -192,12 +192,64 @@ def flow_graph_to_edge_records(graph: nx.DiGraph) -> list[dict[str, Any]]:
     return records
 
 
-def flow_demands_to_records(graph: nx.DiGraph) -> list[dict[str, Any]]:
-    """Таблица demands по узлам."""
-    return [
-        {
-            "узел": n,
-            "demand": float(graph.nodes[n].get("demand", 0)),
-        }
-        for n in sorted(graph.nodes())
-    ]
+def flow_sink_for_nodes(num_nodes: int, source: int = DEFAULT_SOURCE) -> int:
+    """Сток по умолчанию — последний узел (0 … n−1)."""
+    if num_nodes < 2:
+        raise ValueError("num_nodes must be at least 2")
+    sink = num_nodes - 1
+    if source >= sink:
+        raise ValueError("source must be less than sink")
+    return sink
+
+
+def flow_demands_to_records(
+    graph: nx.DiGraph,
+    source: int = DEFAULT_SOURCE,
+    sink: int | None = None,
+) -> list[dict[str, Any]]:
+    """Таблица demands с ролями узлов для UI."""
+    if sink is None and graph.number_of_nodes():
+        sink = max(graph.nodes())
+    records: list[dict[str, Any]] = []
+    for n in sorted(graph.nodes()):
+        d = float(graph.nodes[n].get("demand", 0))
+        if n == source:
+            role = "источник (s)"
+            meaning = f"отдаёт {abs(d):.0f} ед." if d < 0 else "—"
+        elif sink is not None and n == sink:
+            role = "сток (t)"
+            meaning = f"принимает {d:.0f} ед." if d > 0 else "—"
+        elif abs(d) < 1e-9:
+            role = "транзит"
+            meaning = "баланс 0 (вход = выход)"
+        elif d < 0:
+            role = "поставщик"
+            meaning = f"отдаёт {abs(d):.0f} ед."
+        else:
+            role = "потребитель"
+            meaning = f"принимает {d:.0f} ед."
+        records.append(
+            {
+                "узел": n,
+                "demand": d,
+                "роль": role,
+                "смысл": meaning,
+            }
+        )
+    return records
+
+
+DEMAND_HELP_MARKDOWN = """
+**Demand** — сколько потока узел **отдаёт** или **принимает** (нужно для *min cost flow*).
+
+| Знак | Роль в NetworkX | Что означает |
+|------|-----------------|--------------|
+| **< 0** | источник / поставщик | узел **отправляет** поток в сеть (как завод) |
+| **> 0** | сток / потребитель | узел **забирает** поток из сети (как склад) |
+| **= 0** | транзит | только пропускает: сумма входов = сумма выходов |
+
+**Пример:** demand₀ = −15, demand₄ = +15 → по сети нужно провести **15** единиц из узла **0** в узел **4**.  
+Сумма demand по всем узлам = **0** (поток нигде не «исчезает»).
+
+Для **maximum flow** demand не используется — там задаются только **ёмкости** рёбер и пара *(источник, сток)*.
+"""
