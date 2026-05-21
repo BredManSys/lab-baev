@@ -24,6 +24,25 @@ from path_optimizer import (
     shortest_path_by_risk,
     shortest_path_by_time,
 )
+from flow_analysis import (
+    check_capacity_constraints,
+    check_demand_satisfaction,
+    check_flow_conservation,
+    compare_flow_results,
+    max_flow_summary_text,
+    min_cost_flow_summary_text,
+)
+from flow_generator import (
+    DEFAULT_SINK,
+    DEFAULT_SOURCE,
+    flow_demands_to_records,
+    flow_graph_to_edge_records,
+    flow_network_summary,
+    generate_random_flow_network,
+)
+from flow_optimizer import compute_maximum_flow, compute_min_cost_flow
+from flow_session import initialize_flow_session, set_flow_graph
+from flow_visualizer import visualize_flow_graphviz, visualize_flow_pyvis
 from session_manager import initialize_session, render_session_io, reset_session, set_graph
 from utils import (
     KPI_LABELS,
@@ -56,6 +75,21 @@ STEP_GOALS = {
     ),
 }
 
+FLOW_STEP_GOALS = {
+    1: (
+        "**Цель:** сформировать ориентированную **сеть потоков** со случайными ёмкостями и стоимостями "
+        "на рёбрах и demands на узлах. Источник — узел **0**, сток — **4** (постановка курсовой)."
+    ),
+    2: (
+        "**Цель:** найти **максимальный поток** от источника к стоку (NetworkX `maximum_flow`), "
+        "показать распределение по рёбрам и узкие места (bottleneck)."
+    ),
+    3: (
+        "**Цель:** найти **поток минимальной стоимости** при заданных demands, ёмкостях и стоимостях рёбер "
+        "(NetworkX `min_cost_flow`), проверить выполнение ограничений."
+    ),
+}
+
 
 def _parse_path_string(path_str: str) -> list[int]:
     if not path_str or path_str == "N/A":
@@ -67,6 +101,34 @@ def _parse_path_string(path_str: str) -> list[int]:
 
 def _step_banner(step: int) -> None:
     st.info(STEP_GOALS[step])
+
+
+def _flow_step_banner(step: int) -> None:
+    st.info(FLOW_STEP_GOALS[step])
+
+
+def _render_flow_highlight(
+    flow_graph,
+    flow_dict: dict | None,
+    viz_backend: str,
+    edge_font_size: int,
+) -> None:
+    """Отрисовка сети потоков (Graphviz или Pyvis) с подсветкой потока на рёбрах."""
+    if viz_backend == "Pyvis":
+        st.components.v1.html(
+            visualize_flow_pyvis(
+                flow_graph,
+                flow_dict=flow_dict,
+                edge_font_size=edge_font_size,
+            ),
+            height=520,
+            scrolling=True,
+        )
+    else:
+        st.graphviz_chart(
+            visualize_flow_graphviz(flow_graph, flow_dict=flow_dict),
+            use_container_width=True,
+        )
 
 
 def _render_graph_highlight(
@@ -148,13 +210,14 @@ st.markdown(
 )
 
 initialize_session()
+initialize_flow_session()
 
 with st.sidebar:
     st.title("SCM KPI Optimizer")
     st.caption("Курсовая работа: транспортная SCM-сеть и KPI маршрутов")
     st.markdown(
-        "Приложение ведёт по **четырём этапам** слева направо по вкладкам. "
-        "На каждом этапе указана цель; переходите по порядку **1 → 2 → 3 → 4**."
+        "Приложение ведёт по **этапам** слева направо по вкладкам (①–④ — KPI, ⑤ — потоки). "
+        "На каждом этапе указана цель; для KPI переходите **1 → 2 → 3 → 4**, для потоков — вкладка **⑤**."
     )
     st.divider()
     render_session_io()
@@ -185,12 +248,13 @@ st.markdown(
     "по методике курсовой работы."
 )
 
-tab_graph, tab_optima, tab_anchor, tab_kpi = st.tabs(
+tab_graph, tab_optima, tab_anchor, tab_kpi, tab_flow = st.tabs(
     [
         "① Модель сети",
         "② Оптимумы по KPI",
         "③ Итоговый маршрут",
         "④ Оценка KPI",
+        "⑤ Потоки",
     ]
 )
 
@@ -494,3 +558,232 @@ with tab_kpi:
             "recommendations": recommendations,
             "anchor_kpi_used": used_anchor,
         }
+
+# ——— ЧАСТЬ 2: Потоки ———
+with tab_flow:
+    flow_graph = st.session_state.get("flow_graph")
+    flow_source = int(st.session_state.get("flow_source", DEFAULT_SOURCE))
+    flow_sink = int(st.session_state.get("flow_sink", DEFAULT_SINK))
+
+    st.markdown(
+        "Модель — **ориентированная сеть потоков**: на рёбрах **ёмкость** и **стоимость**, "
+        "на узлах — **demand** (для min cost flow). Сначала сгенерируйте сеть, затем по порядку "
+        "рассчитайте максимальный поток и поток минимальной стоимости."
+    )
+
+    # ——— Шаг 1: генерация ———
+    _flow_step_banner(1)
+    st.subheader("Случайная генерация сети")
+    fg_left, fg_right = st.columns([3, 2])
+    with fg_left:
+        st.markdown(
+            "Создайте случайную сеть потоков. После генерации — **сводка**, таблицы рёбер и demands, схема."
+        )
+    with fg_right:
+        flow_edge_prob = st.slider(
+            "Вероятность доп. ребра",
+            0.15,
+            0.75,
+            0.45,
+            0.05,
+            key="flow_gen_edge_prob",
+        )
+
+    if st.button("Сгенерировать случайный граф", type="primary", use_container_width=True, key="btn_gen_flow"):
+        g_flow = generate_random_flow_network(
+            num_nodes=5,
+            edge_probability=flow_edge_prob,
+            source=DEFAULT_SOURCE,
+            sink=DEFAULT_SINK,
+            random_seed=None,
+        )
+        set_flow_graph(g_flow)
+        st.success("Сеть потоков сформирована.")
+        st.rerun()
+
+    if flow_graph is None:
+        st.warning("Сеть ещё не создана. Нажмите «Сгенерировать случайный граф».")
+    else:
+        fsummary = flow_network_summary(flow_graph, flow_source, flow_sink)
+        st.subheader("Сводка по сети")
+        f1, f2, f3, f4, f5 = st.columns(5)
+        f1.metric("Узлов", fsummary.get("nodes", 0))
+        f2.metric("Рёбер", fsummary.get("edges", 0))
+        f3.metric(f"Путь {flow_source}→{flow_sink}", "есть" if fsummary.get("has_path") else "нет")
+        f4.metric("Предложение (источник)", f"{fsummary.get('supply_amount', 0):.1f}")
+        f5.metric("Сеть корректна", "да" if fsummary.get("is_valid") else "нет")
+
+        st.caption(
+            f"Источник: **{flow_source}** · сток: **{flow_sink}** · "
+            f"ёмкости: {fsummary.get('min_capacity', 0):.0f}–{fsummary.get('max_capacity', 0):.0f} · "
+            f"стоимости: {fsummary.get('min_cost', 0):.0f}–{fsummary.get('max_cost', 0):.0f}"
+        )
+
+        t_edges, t_dem = st.tabs(["Таблица рёбер", "Demands узлов"])
+        with t_edges:
+            st.dataframe(
+                pd.DataFrame(flow_graph_to_edge_records(flow_graph)),
+                use_container_width=True,
+                hide_index=True,
+            )
+        with t_dem:
+            st.caption(
+                "Конвенция NetworkX: **отрицательный** demand — узел отдаёт поток (источник), "
+                "**положительный** — принимает (сток)."
+            )
+            st.dataframe(
+                pd.DataFrame(flow_demands_to_records(flow_graph)),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.divider()
+        st.subheader("Схема сети")
+        if "flow_viz_backend" not in st.session_state:
+            st.session_state["flow_viz_backend"] = st.session_state.get("viz_backend", "Graphviz")
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            flow_viz = st.selectbox(
+                "Способ отображения",
+                VIZ_BACKENDS,
+                key="flow_viz_backend",
+                help="Graphviz — схема слева направо; Pyvis — интерактивный граф.",
+            )
+        with fc2:
+            flow_font = st.slider(
+                "Размер подписей на рёбрах",
+                min_value=7,
+                max_value=22,
+                step=1,
+                key="flow_edge_font_size",
+                value=int(st.session_state.get("edge_font_size", 11)),
+            )
+        _render_flow_highlight(flow_graph, None, flow_viz, flow_font)
+
+        # ——— Шаг 2: Maximum Flow ———
+        st.divider()
+        _flow_step_banner(2)
+        st.subheader("Максимальный поток")
+
+        if st.button(
+            "Рассчитать максимальный поток",
+            type="primary",
+            use_container_width=True,
+            key="btn_max_flow",
+        ):
+            try:
+                st.session_state["flow_max_result"] = compute_maximum_flow(
+                    flow_graph, flow_source, flow_sink
+                )
+                st.success("Расчёт максимального потока выполнен.")
+            except Exception as e:
+                st.error(f"Ошибка расчёта: {e}")
+
+        max_res = st.session_state.get("flow_max_result")
+        if max_res:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Макс. поток", f"{max_res.get('flow_value', 0):.4f}")
+            m2.metric(
+                "Узких мест",
+                len(max_res.get("bottlenecks_df", []))
+                if max_res.get("bottlenecks_df") is not None
+                and not getattr(max_res["bottlenecks_df"], "empty", True)
+                else 0,
+            )
+            m3.metric("Источник → сток", f"{flow_source} → {flow_sink}")
+
+            checks_cap = check_capacity_constraints(flow_graph, max_res["flow_dict"])
+            checks_bal = check_flow_conservation(
+                flow_graph, max_res["flow_dict"], flow_source, flow_sink
+            )
+            st.markdown(max_flow_summary_text(max_res, checks_cap, checks_bal))
+
+            st.dataframe(
+                max_res.get("edge_df", pd.DataFrame()),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            with st.expander("Узкие места (bottleneck)"):
+                bdf = max_res.get("bottlenecks_df", pd.DataFrame())
+                if bdf is not None and not bdf.empty:
+                    st.dataframe(bdf, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Нет рёбер с потоком, равным ёмкости.")
+
+            with st.expander("Проверка ограничений"):
+                st.markdown("**Ёмкости рёбер**")
+                st.dataframe(checks_cap, use_container_width=True, hide_index=True)
+                st.markdown("**Сохранение потока по узлам**")
+                st.dataframe(checks_bal, use_container_width=True, hide_index=True)
+
+            st.subheader("Схема с потоком (max flow)")
+            _render_flow_highlight(
+                flow_graph,
+                max_res.get("flow_dict"),
+                st.session_state.get("flow_viz_backend", "Graphviz"),
+                int(st.session_state.get("flow_edge_font_size", 11)),
+            )
+        elif flow_graph is not None:
+            st.info("Нажмите «Рассчитать максимальный поток».")
+
+        # ——— Шаг 3: Min Cost Flow ———
+        st.divider()
+        _flow_step_banner(3)
+        st.subheader("Поток минимальной стоимости")
+
+        if st.button(
+            "Рассчитать поток минимальной стоимости",
+            type="primary",
+            use_container_width=True,
+            key="btn_mcf",
+        ):
+            try:
+                st.session_state["flow_mcf_result"] = compute_min_cost_flow(flow_graph)
+                st.success("Расчёт min cost flow выполнен.")
+            except Exception as e:
+                st.error(f"Ошибка расчёта: {e}")
+
+        mcf_res = st.session_state.get("flow_mcf_result")
+        if mcf_res:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Суммарная стоимость", f"{mcf_res.get('total_cost', 0):.4f}")
+            edge_df = mcf_res.get("edge_df", pd.DataFrame())
+            total_flow_edges = (
+                float(edge_df["поток"].sum()) if not edge_df.empty and "поток" in edge_df.columns else 0
+            )
+            c2.metric("Сумма потоков по рёбрам", f"{total_flow_edges:.4f}")
+            c3.metric("Demands (сумма)", "0 ✓")
+
+            checks_dem = check_demand_satisfaction(flow_graph, mcf_res["flow_dict"])
+            checks_cap_mcf = check_capacity_constraints(flow_graph, mcf_res["flow_dict"])
+            st.markdown(
+                min_cost_flow_summary_text(
+                    float(mcf_res.get("total_cost", 0)),
+                    checks_dem,
+                    checks_cap_mcf,
+                )
+            )
+
+            st.dataframe(edge_df, use_container_width=True, hide_index=True)
+
+            with st.expander("Выполнение demand по узлам"):
+                st.dataframe(checks_dem, use_container_width=True, hide_index=True)
+            with st.expander("Проверка ёмкостей"):
+                st.dataframe(checks_cap_mcf, use_container_width=True, hide_index=True)
+
+            st.subheader("Схема с потоком (min cost)")
+            _render_flow_highlight(
+                flow_graph,
+                mcf_res.get("flow_dict"),
+                st.session_state.get("flow_viz_backend", "Graphviz"),
+                int(st.session_state.get("flow_edge_font_size", 11)),
+            )
+        elif flow_graph is not None:
+            st.info("Нажмите «Рассчитать поток минимальной стоимости».")
+
+        # ——— Сравнение ———
+        if max_res and mcf_res:
+            st.divider()
+            st.subheader("Сравнение результатов")
+            st.markdown(compare_flow_results(max_res, mcf_res, flow_graph))
