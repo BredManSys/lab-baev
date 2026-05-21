@@ -7,7 +7,7 @@ from typing import Any
 import networkx as nx
 import pandas as pd
 
-from flow_generator import DEFAULT_SINK, DEFAULT_SOURCE
+from flow_analysis import inflow_at_node, outflow_at_node, supply_from_demands
 
 
 def _edge_flow_records(
@@ -28,28 +28,32 @@ def _edge_flow_records(
             "ёмкость": float(data.get("capacity", 0)),
         }
         if include_cost:
-            row["стоимость"] = float(data.get("cost", 0))
-            row["затраты на ребре"] = round(flow * float(data.get("cost", 0)), 4)
+            cost = float(data.get("cost", 0))
+            row["стоимость"] = cost
+            row["затраты на ребре"] = round(flow * cost, 4)
         records.append(row)
     return records
 
 
 def compute_maximum_flow(
     graph: nx.DiGraph,
-    source: int = DEFAULT_SOURCE,
-    sink: int = DEFAULT_SINK,
+    source: int,
+    sink: int,
 ) -> dict[str, Any]:
     """
-    Максимальный поток nx.maximum_flow.
-
-    Возвращает value, flow_dict, таблицу рёбер, узкие места.
+    Максимальный поток nx.maximum_flow(..., capacity="capacity").
     """
+    if source not in graph or sink not in graph:
+        raise ValueError(f"Узлы s={source} или t={sink} отсутствуют в графе.")
+
     flow_value, flow_dict = nx.maximum_flow(
         graph,
         _s=source,
         _t=sink,
         capacity="capacity",
     )
+    flow_value = float(flow_value)
+
     edge_records = _edge_flow_records(graph, flow_dict)
     bottlenecks: list[dict[str, Any]] = []
     for u, v, data in graph.edges(data=True):
@@ -66,8 +70,10 @@ def compute_maximum_flow(
             )
 
     return {
-        "flow_value": float(flow_value),
+        "flow_value": flow_value,
         "flow_dict": flow_dict,
+        "flow_from_source": outflow_at_node(flow_dict, source) - inflow_at_node(flow_dict, graph, source),
+        "flow_to_sink": inflow_at_node(flow_dict, graph, sink) - outflow_at_node(flow_dict, sink),
         "edge_df": pd.DataFrame(edge_records),
         "bottlenecks_df": pd.DataFrame(bottlenecks),
         "source": source,
@@ -75,12 +81,21 @@ def compute_maximum_flow(
     }
 
 
-def compute_min_cost_flow(graph: nx.DiGraph) -> dict[str, Any]:
+def compute_min_cost_flow(
+    graph: nx.DiGraph,
+    source: int,
+    sink: int,
+) -> dict[str, Any]:
     """
-    Поток минимальной стоимости (nx.min_cost_flow).
+    Поток минимальной стоимости: nx.min_cost_flow(..., demand, capacity, weight=cost).
+    """
+    if source not in graph or sink not in graph:
+        raise ValueError(f"Узлы s={source} или t={sink} отсутствуют в графе.")
 
-    Узлы: demand; рёбра: capacity, cost (weight).
-    """
+    demand_sum = sum(float(graph.nodes[n].get("demand", 0)) for n in graph.nodes())
+    if abs(demand_sum) > 1e-5:
+        raise ValueError(f"Сумма demand должна быть 0 (сейчас {demand_sum:.6f}).")
+
     try:
         flow_dict = nx.min_cost_flow(
             graph,
@@ -91,11 +106,10 @@ def compute_min_cost_flow(graph: nx.DiGraph) -> dict[str, Any]:
     except nx.NetworkXUnfeasible as e:
         raise ValueError(f"Задача потока неразрешима: {e}") from e
 
-    total_cost = 0.0
-    for u in flow_dict:
-        for v, flow in flow_dict[u].items():
-            if flow > 1e-9 and graph.has_edge(u, v):
-                total_cost += flow * float(graph[u][v].get("cost", 0))
+    total_cost = float(nx.cost_of_flow(graph, flow_dict, weight="cost"))
+    flow_from_source = outflow_at_node(flow_dict, source)
+    flow_to_sink = inflow_at_node(flow_dict, graph, sink)
+    supply = supply_from_demands(graph, source, sink)
 
     edge_records = _edge_flow_records(graph, flow_dict, include_cost=True)
 
@@ -103,25 +117,9 @@ def compute_min_cost_flow(graph: nx.DiGraph) -> dict[str, Any]:
         "flow_dict": flow_dict,
         "total_cost": round(total_cost, 4),
         "edge_df": pd.DataFrame(edge_records),
+        "source": source,
+        "sink": sink,
+        "flow_from_source": flow_from_source,
+        "flow_to_sink": flow_to_sink,
+        "supply": supply,
     }
-
-
-def localize_max_flow_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    rename = {
-        "from": "от",
-        "to": "до",
-        "flow": "поток",
-        "capacity": "ёмкость",
-    }
-    return df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
-
-
-def localize_min_cost_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    rename = {
-        "edge_cost": "затраты на ребре",
-    }
-    return df.rename(columns={k: v for k, v in rename.items() if k in df.columns})

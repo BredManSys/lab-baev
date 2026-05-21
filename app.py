@@ -747,7 +747,11 @@ with tab_flow:
 
             checks_cap = check_capacity_constraints(flow_graph, max_res["flow_dict"])
             checks_bal = check_flow_conservation(
-                flow_graph, max_res["flow_dict"], flow_source, flow_sink
+                flow_graph,
+                max_res["flow_dict"],
+                flow_source,
+                flow_sink,
+                flow_value=float(max_res.get("flow_value", 0)),
             )
             st.markdown(max_flow_summary_text(max_res, checks_cap, checks_bal))
 
@@ -795,7 +799,9 @@ with tab_flow:
             key="btn_mcf",
         ):
             try:
-                st.session_state["flow_mcf_result"] = compute_min_cost_flow(flow_graph)
+                st.session_state["flow_mcf_result"] = compute_min_cost_flow(
+                    flow_graph, flow_source, flow_sink
+                )
                 st.success("Min cost flow рассчитан.")
                 st.rerun()
             except Exception as e:
@@ -809,13 +815,17 @@ with tab_flow:
             c2.metric("Рёбер с f > 0", len(edge_df) if edge_df is not None else 0)
             c3.metric("Σ demand", "0 ✓")
 
-            checks_dem = check_demand_satisfaction(flow_graph, mcf_res["flow_dict"])
+            checks_dem = check_demand_satisfaction(
+                flow_graph, mcf_res["flow_dict"], flow_source, flow_sink
+            )
             checks_cap_mcf = check_capacity_constraints(flow_graph, mcf_res["flow_dict"])
             st.markdown(
                 min_cost_flow_summary_text(
                     float(mcf_res.get("total_cost", 0)),
                     checks_dem,
                     checks_cap_mcf,
+                    source=flow_source,
+                    sink=flow_sink,
                 )
             )
 
@@ -842,7 +852,11 @@ with tab_flow:
         if max_res and mcf_res:
             st.divider()
             st.subheader("④ Сравнение постановок")
-            st.markdown(compare_flow_results(max_res, mcf_res, flow_graph))
+            st.markdown(
+                compare_flow_results(
+                    max_res, mcf_res, flow_graph, flow_source, flow_sink
+                )
+            )
         elif flow_graph is not None:
             st.divider()
             st.caption("④ Сравнение появится после расчётов **②** и **③**.")
