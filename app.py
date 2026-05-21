@@ -602,16 +602,12 @@ with tab_flow:
     _flow_step_banner(1)
     st.subheader("① Модель сети (генерация)")
 
-    if "flow_num_nodes" not in st.session_state:
-        st.session_state["flow_num_nodes"] = 5
-
     gen_left, gen_right = st.columns([2, 1])
     with gen_left:
         flow_num_nodes = st.slider(
             "Число узлов",
             min_value=4,
             max_value=12,
-            value=int(st.session_state["flow_num_nodes"]),
             key="flow_num_nodes",
             help="Узлы нумеруются 0, 1, …, n−1. Источник s = 0, сток t = n−1.",
         )
@@ -653,9 +649,10 @@ with tab_flow:
     if flow_graph is None:
         st.warning("Модель ещё не построена. Задайте число узлов и нажмите «Сгенерировать случайный граф».")
     else:
+        model_nodes = int(st.session_state.get("flow_model_nodes", flow_graph.number_of_nodes()))
         if flow_graph.number_of_nodes() != flow_num_nodes:
             st.warning(
-                f"В слайдере указано **{flow_num_nodes}** узлов, в модели — **{flow_graph.number_of_nodes()}**. "
+                f"В слайдере **{flow_num_nodes}** узлов, в сохранённой модели — **{model_nodes}**. "
                 "Перегенерируйте граф, чтобы обновить топологию."
             )
         fsummary = flow_network_summary(flow_graph, flow_source, flow_sink)

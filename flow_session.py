@@ -12,6 +12,7 @@ FLOW_DEFAULT_STATE: dict[str, Any] = {
     "flow_source": 0,
     "flow_sink": 4,
     "flow_num_nodes": 5,
+    "flow_model_nodes": 5,
     "flow_max_result": None,
     "flow_mcf_result": None,
     "flow_viz_backend": "Graphviz",
@@ -40,7 +41,8 @@ def set_flow_graph(
         st.session_state["flow_sink"] = int(
             sink if sink is not None else max(graph.nodes())
         )
-        st.session_state["flow_num_nodes"] = int(
+        # Не трогаем flow_num_nodes — это ключ слайдера; только факт модели:
+        st.session_state["flow_model_nodes"] = int(
             num_nodes if num_nodes is not None else graph.number_of_nodes()
         )
 
